@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#252827" />
+  <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
+  <title>病骨生花</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="chat-app">
+    <aside class="side-rail" id="sideRail" aria-label="功能侧边栏">
+      <div class="profile-mark" id="myMark">我</div>
+      <nav>
+        <button class="rail-button active" data-tool="chat" title="聊天" aria-label="聊天">◌</button>
+        <span class="rail-rule"></span>
+        <button class="rail-button" data-tool="cards" title="字卡" aria-label="字卡">▤</button>
+        <button class="rail-button" data-tool="stickers" title="表情" aria-label="表情">☺</button>
+        <button class="rail-button" data-tool="memories" title="纪念日" aria-label="纪念日">◇</button>
+        <button class="rail-button" data-tool="appearance" title="外观" aria-label="外观">☼</button>
+        <button class="rail-button" data-tool="data" title="数据" aria-label="数据">▱</button>
+      </nav>
+      <button class="theme-button" id="themeButton" title="切换深浅模式" aria-label="切换深浅模式">☾</button>
+    </aside>
+
+    <button class="mobile-scrim" id="mobileScrim" aria-label="关闭侧边栏"></button>
+
+    <aside class="tool-drawer" id="toolDrawer" aria-hidden="true">
+      <header>
+        <button id="drawerBack" aria-label="返回聊天">‹</button>
+        <strong id="drawerTitle">字卡</strong>
+        <button id="drawerClose" aria-label="关闭">×</button>
+      </header>
+      <div class="drawer-content" id="drawerContent"></div>
+    </aside>
+
+    <section class="chat-window">
+      <header class="chat-topbar">
+        <button class="mobile-menu-button" id="mobileMenu" aria-label="打开侧边栏">☰</button>
+        <div class="chat-avatar" id="loverTopMark">爱</div>
+        <div class="chat-person">
+          <strong id="loverName">我的唯一</strong>
+          <span id="presence">讯号在线</span>
+        </div>
+        <div class="mode-picker" aria-label="传讯模式">
+          <button class="active" data-mode="random">随机</button>
+          <button data-mode="response">回应</button>
+        </div>
+        <button class="more-button" aria-label="更多">•••</button>
+      </header>
+
+      <div class="message-list" id="messageList">
+        <div class="day-label">今天</div>
+        <div id="messages"></div>
+        <div id="typing" class="message-row lover typing-row" hidden>
+          <div class="message-avatar lover-mark">爱</div>
+          <div class="typing-bubble"><i></i><i></i><i></i></div>
+        </div>
+        <div id="messageEnd"></div>
+      </div>
+
+      <footer class="composer">
+        <div class="composer-tools">
+          <button aria-label="表情">☺</button>
+          <button aria-label="添加附件">⌕</button>
+          <span id="modeLabel">随机传讯</span>
+        </div>
+        <textarea id="draft" rows="2" placeholder="输入消息…" aria-label="消息内容"></textarea>
+        <button class="send-button" id="sendButton" disabled>发送</button>
+      </footer>
+    </section>
+  </main>
+  <script src="./app.js" defer></script>
+</body>
+</html>
