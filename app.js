@@ -14,6 +14,10 @@ const defaults = {
   mode: "random",
   replyDelayMin: 2,
   replyDelayMax: 5,
+  sectionCombos: {},
+  proactiveEnabled: false,
+  proactiveInterval: 30,
+  nextProactiveAt: 0,
   anniversary: "2026-01-06",
   memories: [{ id: "memory-1", name: "我们的纪念日", date: "2026-12-31", repeat: true }],
   memoryQuotes: ["相爱不是某一个瞬间，\n是每一个普通日子都被好好记住。"],
@@ -34,14 +38,26 @@ let activeTool = null;
 let typing = false;
 let cardQuery = "";
 let toastTimer = null;
+let proactiveTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const safeImage = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : "";
 
-function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(oldKey) || "{}");
+function currentConversation() {
+  return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || state.conversations[0];
+}
+
+function currentMessages() {
+  return currentConversation()?.messages || [];
+}
+
+function touchConversation() {
+  const conversation = currentConversation();
+  if (conversation) conversation.updatedAt = new Date().toISOString();
+}
+
+function normalizeState(saved = {}) {
     const migrated = { ...structuredClone(defaults), ...saved };
     migrated.sections = Array.isArray(saved.sections) ? saved.sections.map((item) => typeof item === "string" ? item : item.name).filter(Boolean) : defaults.sections;
     migrated.cards = Array.isArray(saved.cards) ? saved.cards.map((card) => ({
@@ -54,10 +70,25 @@ function loadState() {
     migrated.replyDelayMin = Math.min(60, Math.max(1, Number(saved.replyDelayMin ?? defaults.replyDelayMin)));
     migrated.replyDelayMax = Math.min(120, Math.max(migrated.replyDelayMin, Number(saved.replyDelayMax ?? defaults.replyDelayMax)));
     migrated.stickers = Array.isArray(saved.stickers) ? saved.stickers : [];
-    migrated.messages = Array.isArray(saved.messages) ? saved.messages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) : defaults.messages;
+    const legacyMessages = Array.isArray(saved.messages) ? saved.messages : defaults.messages;
+    migrated.conversations = Array.isArray(saved.conversations) && saved.conversations.length ? saved.conversations.map((conversation) => ({
+      id: conversation.id || uid(), title: conversation.title || "新对话", createdAt: conversation.createdAt || new Date().toISOString(), updatedAt: conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
+      messages: Array.isArray(conversation.messages) ? conversation.messages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) : [],
+    })) : [{ id: uid(), title: `与${migrated.loverName}的对话`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: legacyMessages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) }];
+    migrated.activeConversationId = migrated.conversations.some((conversation) => conversation.id === saved.activeConversationId) ? saved.activeConversationId : migrated.conversations[0].id;
+    migrated.sectionCombos = saved.sectionCombos && typeof saved.sectionCombos === "object" ? saved.sectionCombos : {};
+    migrated.proactiveEnabled = saved.proactiveEnabled === true;
+    migrated.proactiveInterval = Math.min(120, Math.max(5, Number(saved.proactiveInterval ?? defaults.proactiveInterval)));
+    migrated.nextProactiveAt = Number(saved.nextProactiveAt || 0);
+    delete migrated.messages;
     return migrated;
+}
+
+function loadState() {
+  try {
+    return normalizeState(JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(oldKey) || "{}"));
   } catch {
-    return structuredClone(defaults);
+    return normalizeState({});
   }
 }
 
@@ -84,6 +115,11 @@ function avatarMarkup(dataUrl, fallback) {
   return safe ? `<img src="${safe}" alt="">` : `<span>${escapeHtml((fallback || "?").slice(0, 1))}</span>`;
 }
 
+function relationshipDays() {
+  const start = new Date(`${state.anniversary}T00:00:00`).getTime();
+  return Number.isFinite(start) ? Math.max(1, Math.floor((Date.now() - start) / 86400000) + 1) : 1;
+}
+
 function applyAppearance() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.style.setProperty("--chat-font-size", `${state.fontSize}px`);
@@ -91,8 +127,8 @@ function applyAppearance() {
   document.documentElement.style.setProperty("--bg-overlay", String(state.backgroundOverlay / 100));
   $("messageList").style.backgroundImage = safeImage(state.backgroundImage) ? `url("${state.backgroundImage}")` : "";
   $("themeButton").innerHTML = state.theme === "light" ? '<svg viewBox="0 0 24 24"><path d="M18 15a7 7 0 0 1-9-9 7 7 0 1 0 9 9Z"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>';
-  $("profileButton").innerHTML = avatarMarkup(state.myAvatar, state.myName);
-  $("loverTopAvatar").innerHTML = avatarMarkup(state.loverAvatar, state.loverName);
+  $("profileButton").innerHTML = `<span><b>${relationshipDays()}</b><small>DAYS</small></span>`;
+  $("profileButton").title = `你和${state.loverName}已经相爱 ${relationshipDays()} 天`;
   $("loverName").textContent = state.loverName;
   document.querySelectorAll(".lover-mark").forEach((node) => { node.innerHTML = avatarMarkup(state.loverAvatar, state.loverName); });
 }
@@ -104,16 +140,72 @@ function setMode(mode) {
   saveState();
 }
 
+function openChatOptions() {
+  renderChatOptions();
+  $("chatOptions").classList.add("open"); $("chatOptions").setAttribute("aria-hidden", "false");
+  $("optionsScrim").hidden = false;
+}
+
+function closeChatOptions() {
+  $("chatOptions").classList.remove("open"); $("chatOptions").setAttribute("aria-hidden", "true");
+  $("optionsScrim").hidden = true;
+}
+
+function renderChatOptions() {
+  const conversation = currentConversation();
+  $("chatOptionsContent").innerHTML = `<section class="options-section"><div class="section-title"><strong>传讯模式</strong></div><div class="mode-choice"><button data-mode="random" class="${state.mode === "random" ? "active" : ""}">随机<span>字卡与表情包统一抽取</span></button><button data-mode="response" class="${state.mode === "response" ? "active" : ""}">回应<span>关键词筛选字卡，表情包保持随机</span></button></div></section><section class="options-section"><div class="section-title"><strong>主动传讯</strong><span>可选</span></div><label class="option-toggle"><span><b>允许主动发消息</b><small>页面打开或再次回来时检查</small></span><input id="proactiveEnabled" type="checkbox" ${state.proactiveEnabled ? "checked" : ""}><i></i></label><div class="range-field"><div class="range-head"><span>大约间隔</span><b id="proactiveValue">${state.proactiveInterval} 分钟</b></div><input id="proactiveRange" type="range" min="5" max="120" step="5" value="${state.proactiveInterval}"></div><p class="options-note">受手机系统限制，网页被彻底关闭后无法保证实时后台运行；重新打开时会补做检查。</p></section><section class="options-section conversation-actions"><div class="section-title"><strong>当前对话</strong><span>${escapeHtml(conversation.title)}</span></div><button class="secondary-button" id="newConversationFromOptions">新建对话</button><button class="danger-outline-button" id="clearConversation">清除此对话的聊天记录</button></section>`;
+  document.querySelectorAll("#chatOptions [data-mode]").forEach((button) => button.addEventListener("click", () => { setMode(button.dataset.mode); renderChatOptions(); }));
+  $("proactiveEnabled").addEventListener("change", (event) => { state.proactiveEnabled = event.target.checked; state.nextProactiveAt = 0; saveState(); scheduleProactive(); });
+  $("proactiveRange").addEventListener("input", (event) => { state.proactiveInterval = Number(event.target.value); $("proactiveValue").textContent = `${state.proactiveInterval} 分钟`; state.nextProactiveAt = 0; saveState(); scheduleProactive(); });
+  $("newConversationFromOptions").addEventListener("click", () => { closeChatOptions(); createConversation(); });
+  $("clearConversation").addEventListener("click", () => {
+    if (!confirm("清空当前对话的全部聊天记录吗？")) return;
+    conversation.messages = []; touchConversation(); saveState(); renderMessages(); renderChatOptions();
+  });
+}
+
+function deliverProactiveMessage() {
+  if (!state.proactiveEnabled) return;
+  const cards = state.cards.filter((card) => card.enabled && card.random).map((card) => ({ kind: "card", card }));
+  const stickers = state.stickers.map((sticker) => ({ kind: "sticker", sticker }));
+  const item = [...cards, ...stickers][Math.floor(Math.random() * (cards.length + stickers.length))];
+  if (item?.kind === "sticker") currentMessages().push({ id: uid(), from: "lover", type: "sticker", content: `[表情] ${item.sticker.name}`, dataUrl: item.sticker.dataUrl, createdAt: new Date().toISOString() });
+  else if (item?.card) currentMessages().push({ id: uid(), from: "lover", type: "text", content: item.card.content, createdAt: new Date().toISOString() });
+  if (item) { touchConversation(); renderMessages(); }
+  state.nextProactiveAt = Date.now() + state.proactiveInterval * 60000; saveState(); scheduleProactive();
+}
+
+function scheduleProactive() {
+  clearTimeout(proactiveTimer);
+  if (!state.proactiveEnabled) return;
+  if (!state.nextProactiveAt) { state.nextProactiveAt = Date.now() + state.proactiveInterval * 60000; saveState(); }
+  const wait = Math.max(800, state.nextProactiveAt - Date.now());
+  proactiveTimer = setTimeout(deliverProactiveMessage, Math.min(wait, 2147483647));
+}
+
+function messageTimeLabel(value) {
+  const date = new Date(value); const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const clock = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return `今天 ${clock}`;
+  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${clock}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
+}
+
 function renderMessages(scrollToEnd = true) {
-  $("messages").innerHTML = state.messages.map((message) => {
+  let previousTime = 0;
+  $("messages").innerHTML = currentMessages().map((message, index) => {
     const mine = message.from === "me";
-    const time = new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    const timestamp = new Date(message.createdAt).getTime();
+    const divider = index === 0 || !Number.isFinite(previousTime) || timestamp - previousTime >= 5 * 60000 ? `<div class="time-divider">${messageTimeLabel(message.createdAt)}</div>` : "";
+    previousTime = timestamp;
     const media = ["sticker", "image"].includes(message.type) && safeImage(message.dataUrl);
     const content = media
       ? `<div class="bubble media-bubble ${message.type === "sticker" ? "sticker-bubble" : "image-bubble"}"><img src="${message.dataUrl}" alt="${escapeHtml(message.content || (message.type === "image" ? "图片" : "表情"))}"></div>`
       : `<div class="bubble">${escapeHtml(message.content)}</div>`;
     const remove = `<button class="message-delete" data-delete-message="${message.id}" aria-label="删除这条消息" title="删除这条消息"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button>`;
-    return `<article class="message-row ${mine ? "me" : "lover"}" data-message-row="${message.id}">${mine ? remove : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}<time>${time}</time></div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : remove}</article>`;
+    return `${divider}<article class="message-row ${mine ? "me" : "lover"}" data-message-row="${message.id}">${mine ? remove : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}</div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : remove}</article>`;
   }).join("");
   document.querySelectorAll("[data-message-row] .bubble").forEach((bubble) => bubble.addEventListener("click", () => {
     const row = bubble.closest("[data-message-row]");
@@ -122,9 +214,9 @@ function renderMessages(scrollToEnd = true) {
     row.classList.toggle("actions-open", willOpen);
   }));
   document.querySelectorAll("[data-delete-message]").forEach((button) => button.addEventListener("click", () => {
-    if (!confirm("删除这条消息吗？")) return;
-    state.messages = state.messages.filter((message) => message.id !== button.dataset.deleteMessage);
-    saveState();
+    const conversation = currentConversation();
+    conversation.messages = conversation.messages.filter((message) => message.id !== button.dataset.deleteMessage);
+    touchConversation(); saveState();
     renderMessages(false);
   }));
   updateReplyButton();
@@ -133,28 +225,31 @@ function renderMessages(scrollToEnd = true) {
 
 function pendingMessages() {
   let lastLover = -1;
-  state.messages.forEach((message, index) => { if (message.from === "lover") lastLover = index; });
-  return state.messages.slice(lastLover + 1).filter((message) => message.from === "me");
+  const messages = currentMessages();
+  messages.forEach((message, index) => { if (message.from === "lover") lastLover = index; });
+  return messages.slice(lastLover + 1).filter((message) => message.from === "me");
 }
 
 function updateReplyButton() {
-  $("replyButton").disabled = typing || pendingMessages().length === 0;
+  $("replyButton").disabled = typing;
 }
 
 function sendText() {
   const draft = $("draft");
   const content = draft.value.trim();
   if (!content) return;
-  state.messages.push({ id: uid(), from: "me", type: "text", content, createdAt: new Date().toISOString() });
+  const conversation = currentConversation();
+  conversation.messages.push({ id: uid(), from: "me", type: "text", content, createdAt: new Date().toISOString() });
+  if (conversation.title === "新对话") conversation.title = content.slice(0, 18);
+  touchConversation();
   draft.value = "";
-  $("sendButton").disabled = true;
   saveState();
   renderMessages();
 }
 
 function sendSticker(sticker) {
-  state.messages.push({ id: uid(), from: "me", type: "sticker", content: `[表情] ${sticker.name}`, dataUrl: sticker.dataUrl, createdAt: new Date().toISOString() });
-  saveState();
+  currentMessages().push({ id: uid(), from: "me", type: "sticker", content: `[表情] ${sticker.name}`, dataUrl: sticker.dataUrl, createdAt: new Date().toISOString() });
+  touchConversation(); saveState();
   closePopovers();
   renderMessages();
 }
@@ -165,16 +260,40 @@ async function sendImage(event) {
   if (file.size > 8 * 1024 * 1024) { showToast("图片太大，请选择 8MB 以内的图片"); event.target.value = ""; return; }
   try {
     const dataUrl = await compressImage(file, 1600, 0.84);
-    state.messages.push({ id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() });
-    if (saveState(false)) renderMessages();
+    currentMessages().push({ id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() });
+    touchConversation(); if (saveState(false)) renderMessages();
   } catch { showToast("这张图片暂时无法读取"); }
   event.target.value = "";
 }
 
+function buildReplyItems(combined) {
+  const eligibleCards = state.cards.filter((card) => card.enabled && (state.mode === "random" ? card.random : card.response));
+  const stickerItems = state.stickers.map((sticker) => ({ kind: "sticker", sticker }));
+  let cardPool = eligibleCards;
+  if (state.mode === "response" && combined) {
+    const matched = eligibleCards.filter((card) => card.triggers.some((word) => combined.includes(word)));
+    if (matched.length) cardPool = matched;
+  }
+  const recent = currentMessages().slice(-16).filter((message) => message.from === "lover").map((message) => message.content);
+  const freshCards = cardPool.filter((card) => !recent.includes(card.content));
+  if (freshCards.length) cardPool = freshCards;
+  const pool = [...cardPool.map((card) => ({ kind: "card", card })), ...stickerItems];
+  const picked = pool[Math.floor(Math.random() * pool.length)];
+  if (!picked) return [{ kind: "text", content: "这次还没有合适的话。先去字卡里添上一句吧。" }];
+  if (picked.kind === "sticker") return [picked];
+  const items = [picked];
+  const combo = state.sectionCombos[picked.card.section];
+  if (combo?.enabled && Math.random() < 0.5) {
+    const targetSections = String(combo.targets || "").split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+    const followPool = eligibleCards.filter((card) => targetSections.includes(card.section) && card.id !== picked.card.id);
+    if (followPool.length) items.push({ kind: "card", card: followPool[Math.floor(Math.random() * followPool.length)] });
+  }
+  return items;
+}
+
 function requestReply() {
-  const pending = pendingMessages();
-  if (!pending.length || typing) return;
-  const combined = pending.map((message) => message.content).join("\n");
+  if (typing) return;
+  const combined = pendingMessages().map((message) => message.content).join("\n");
   typing = true;
   $("typing").hidden = false;
   $("presence").textContent = "正在输入…";
@@ -184,23 +303,17 @@ function requestReply() {
   const maximum = Math.min(120, Math.max(minimum, Number(state.replyDelayMax || minimum)));
   const delay = Math.round((minimum + Math.random() * (maximum - minimum)) * 1000);
   setTimeout(() => {
-    let answer = "这次还没有合适的话。先去字卡里添上一句吧。";
     try {
-      let pool = state.cards.filter((card) => card.enabled && (state.mode === "random" ? card.random : card.response));
-      if (state.mode === "response") {
-        const matched = pool.filter((card) => card.triggers.some((word) => combined.includes(word)));
-        if (matched.length) pool = matched;
-      }
-      const recent = state.messages.slice(-12).filter((message) => message.from === "lover").map((message) => message.content);
-      const fresh = pool.filter((card) => !recent.includes(card.content));
-      if (fresh.length) pool = fresh;
-      answer = pool[Math.floor(Math.random() * pool.length)]?.content || answer;
+      const now = Date.now();
+      buildReplyItems(combined).forEach((item, index) => {
+        if (item.kind === "sticker") currentMessages().push({ id: uid(), from: "lover", type: "sticker", content: `[表情] ${item.sticker.name}`, dataUrl: item.sticker.dataUrl, createdAt: new Date(now + index).toISOString() });
+        else currentMessages().push({ id: uid(), from: "lover", type: "text", content: item.card?.content || item.content, createdAt: new Date(now + index).toISOString() });
+      });
     } finally {
-      state.messages.push({ id: uid(), from: "lover", type: "text", content: answer, createdAt: new Date().toISOString() });
       typing = false;
       $("typing").hidden = true;
       $("presence").textContent = "讯号在线";
-      saveState();
+      touchConversation(); saveState();
       renderMessages();
     }
   }, delay);
@@ -230,42 +343,54 @@ function openTool(tool) {
   activeTool = tool === "chat" ? null : tool;
   document.querySelectorAll("[data-tool]").forEach((button) => button.classList.toggle("active", button.dataset.tool === (activeTool || "chat")));
   $("toolDrawer").classList.toggle("open", Boolean(activeTool));
+  $("toolDrawer").classList.toggle("conversation-drawer", activeTool === "conversations");
   $("toolDrawer").setAttribute("aria-hidden", String(!activeTool));
+  $("toolScrim").hidden = !(activeTool === "conversations" && window.matchMedia("(max-width: 760px)").matches);
+  closeChatOptions();
   closePopovers();
   if (activeTool) renderDrawer(activeTool);
 }
 
 function renderDrawer(tool) {
-  const names = { menu: "功能", cards: "字卡", stickers: "表情包", memories: "纪念日", background: "聊天背景", appearance: "设置", data: "数据" };
+  const names = { conversations: "对话", cards: "字卡", stickers: "表情包", memories: "纪念日", appearance: "设置", data: "数据" };
   $("drawerTitle").textContent = names[tool];
-  if (tool === "menu") renderMenuDrawer();
+  if (tool === "conversations") renderConversationsDrawer();
   if (tool === "cards") renderCardsDrawer();
   if (tool === "stickers") renderStickersDrawer();
   if (tool === "memories") renderMemoriesDrawer();
-  if (tool === "background") renderBackgroundDrawer();
   if (tool === "appearance") renderAppearanceDrawer();
   if (tool === "data") renderDataDrawer();
   $("drawerContent").scrollTop = 0;
 }
 
-function renderMenuDrawer() {
+function renderConversationsDrawer() {
   const items = [
     ["cards", "字卡", "录入、分区和调整回复规则", '<path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/>'],
     ["stickers", "表情包", "上传和整理聊天图片", '<circle cx="12" cy="12" r="8"/><path d="M9 10h.01M15 10h.01M9 14c1.6 1.4 4.4 1.4 6 0"/>'],
-    ["memories", "纪念日", "记录相爱的日子", '<path d="M6 5h12v15H6zM8 3v4M16 3v4M6 9h12M9 13h2M13 13h2M9 16h2"/>'],
-    ["background", "聊天背景", "背景、字号和气泡设置", '<path d="M4 5h16v14H4zM7 16l4-4 3 3 2-2 2 3M15 9h.01"/>'],
-    ["appearance", "设置", "头像、称呼、回复节奏和显示模式", '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>'],
+    ["appearance", "设置", "资料、背景、回复节奏和显示模式", '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>'],
     ["data", "数据", "备份、恢复和整理本地记录", '<path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5"/>'],
   ];
-  $("drawerContent").innerHTML = `<section class="mobile-menu-profile"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><div><strong>${escapeHtml(state.myName)}</strong><span>所有内容仅保存在这台设备</span></div></section><nav class="mobile-menu-list">${items.map(([tool, title, description, icon]) => `<button data-menu-tool="${tool}"><svg viewBox="0 0 24 24">${icon}</svg><span><strong>${title}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</nav>`;
+  const conversations = [...state.conversations].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  $("drawerContent").innerHTML = `<button class="relationship-summary" id="openMemories"><span>TOGETHER</span><strong>你和 ${escapeHtml(state.loverName)} 已经相爱</strong><b>${relationshipDays()} <i>days</i></b></button><section class="conversation-section"><div class="section-title"><strong>对话</strong><button class="new-conversation" id="newConversation">＋ 新建</button></div><div class="conversation-list">${conversations.map((conversation) => { const last = conversation.messages.at(-1); return `<button class="conversation-item ${conversation.id === state.activeConversationId ? "active" : ""}" data-conversation="${conversation.id}"><span><strong>${escapeHtml(conversation.title)}</strong><small>${escapeHtml(last?.content || "还没有消息")}</small></span><time>${new Date(conversation.updatedAt).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })}</time></button>`; }).join("")}</div></section><div class="drawer-subtitle">工具与设置</div><nav class="mobile-menu-list settings-menu">${items.map(([tool, title, description, icon]) => `<button data-menu-tool="${tool}"><svg viewBox="0 0 24 24">${icon}</svg><span><strong>${title}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</nav>`;
+  $("openMemories").addEventListener("click", () => openTool("memories"));
+  $("newConversation").addEventListener("click", createConversation);
+  document.querySelectorAll("[data-conversation]").forEach((button) => button.addEventListener("click", () => {
+    state.activeConversationId = button.dataset.conversation; saveState(); renderMessages(); openTool("chat");
+  }));
   document.querySelectorAll("[data-menu-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.menuTool)));
+}
+
+function createConversation() {
+  const conversation = { id: uid(), title: "新对话", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: [] };
+  state.conversations.push(conversation); state.activeConversationId = conversation.id; saveState(); renderMessages(); openTool("chat"); $("draft").focus();
 }
 
 function renderCardsDrawer() {
   const visible = state.cards.filter((card) => card.content.includes(cardQuery) || card.section.includes(cardQuery) || card.triggers.some((word) => word.includes(cardQuery)));
   $("drawerContent").innerHTML = `
     <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="今天也有好好想你。&#10;慢慢来，我一直都在。"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
-    <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
+    <section class="drawer-section"><div class="section-title"><strong>分区与组合回复</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div><p class="drawer-intro combo-intro">开启后，这个分区仍会保留单句回复，也可能从填写的分区里再接一句。</p><div class="combo-config">${state.sections.map((name) => { const combo = state.sectionCombos[name] || {}; return `<article><label class="mini-toggle"><input type="checkbox" data-combo-enabled="${escapeHtml(name)}" ${combo.enabled ? "checked" : ""}><i></i><span>${escapeHtml(name)}</span></label><input data-combo-targets="${escapeHtml(name)}" value="${escapeHtml(combo.targets || "")}" placeholder="可接续分区，逗号分隔"></article>`; }).join("")}</div></section>
+    <section class="drawer-section duplicate-check"><div class="section-title"><strong>全库重复检查</strong><span>不区分分组</span></div><button class="secondary-button" id="checkDuplicates">检查全部 ${state.cards.length} 张字卡</button><div id="duplicateResults"></div></section>
     <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list card-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label></div><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
   $("addBulkCards").addEventListener("click", () => {
     const lines = $("bulkCards").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -277,6 +402,18 @@ function renderCardsDrawer() {
     if (name && !state.sections.includes(name)) { state.sections.push(name); saveState(); renderCardsDrawer(); }
   });
   $("cardSearch").addEventListener("input", (event) => { cardQuery = event.target.value; renderCardsDrawer(); requestAnimationFrame(() => $("cardSearch")?.focus()); });
+  document.querySelectorAll("[data-combo-enabled]").forEach((input) => input.addEventListener("change", (event) => {
+    const name = event.target.dataset.comboEnabled; state.sectionCombos[name] = { ...(state.sectionCombos[name] || {}), enabled: event.target.checked }; saveState();
+  }));
+  document.querySelectorAll("[data-combo-targets]").forEach((input) => input.addEventListener("change", (event) => {
+    const name = event.target.dataset.comboTargets; state.sectionCombos[name] = { ...(state.sectionCombos[name] || {}), targets: event.target.value }; saveState();
+  }));
+  $("checkDuplicates").addEventListener("click", () => {
+    const groups = new Map();
+    state.cards.forEach((card) => { const key = card.content.trim().replace(/\s+/g, " "); if (!key) return; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(card); });
+    const duplicates = [...groups.entries()].filter(([, cards]) => cards.length > 1);
+    $("duplicateResults").innerHTML = duplicates.length ? `<div class="duplicate-summary">发现 ${duplicates.length} 组重复内容</div>${duplicates.map(([content, cards]) => `<article><p>${escapeHtml(content)}</p><span>${cards.map((card) => escapeHtml(card.section)).join(" · ")} · 共 ${cards.length} 张</span></article>`).join("")}` : '<div class="duplicate-clean">✓ 没有发现重复字卡</div>';
+  });
   document.querySelectorAll("[data-card-field]").forEach((input) => input.addEventListener("change", (event) => {
     const card = state.cards.find((item) => item.id === event.target.closest("[data-card]").dataset.card);
     const field = event.target.dataset.cardField;
@@ -293,7 +430,7 @@ function renderCardsDrawer() {
   document.querySelectorAll("[data-delete-section]").forEach((button) => button.addEventListener("click", () => {
     const name = button.dataset.deleteSection;
     if (state.cards.some((card) => card.section === name)) { showToast("请先把该分区的字卡移到其他分区"); return; }
-    state.sections = state.sections.filter((section) => section !== name); saveState(); renderCardsDrawer();
+    state.sections = state.sections.filter((section) => section !== name); delete state.sectionCombos[name]; saveState(); renderCardsDrawer();
   }));
 }
 
@@ -322,7 +459,7 @@ function renderMemoriesDrawer() {
   const since = state.anniversary ? state.anniversary.replaceAll("-", " · ") : "尚未设定";
   const quotes = state.memoryQuotes.length ? state.memoryQuotes : defaults.memoryQuotes;
   const quote = quotes[Math.floor(Math.random() * quotes.length)];
-  $("drawerContent").innerHTML = `<section class="memory-hero"><span class="memory-kicker">TOGETHER · SINCE</span><div class="memory-flourish">❦</div><div class="memory-number">${Number.isFinite(days) ? days : "—"}</div><span class="memory-days">days</span><p>${escapeHtml(quote).replace(/\n/g, "<br>")}</p><small>${escapeHtml(since)}</small></section><section class="memory-date-setting">${inputField("我们从这一天开始", "date", state.anniversary, "anniversary")}</section><section class="drawer-section memory-quotes"><div class="section-title"><strong>纪念日文案</strong><span>进入时随机显示</span></div><label class="field-label"><textarea id="newMemoryQuotes" placeholder="写下一句想在纪念日页面看见的话…&#10;可以一行添加一句"></textarea></label><button class="secondary-button memory-add" id="addMemoryQuotes">加入文案库</button><div class="quote-list">${state.memoryQuotes.map((item, index) => `<article><p>${escapeHtml(item)}</p><button data-delete-quote="${index}" aria-label="删除这句文案">×</button></article>`).join("")}</div></section><section class="drawer-section memory-create"><div class="section-title"><strong>再留下一枚时间坐标</strong><span>纪念日</span></div><div class="inline-form"><input id="memoryName" placeholder="为这一天取个名字"><input id="memoryDate" type="date"></div><label class="memory-repeat"><input id="memoryRepeat" type="checkbox" checked><i></i><span>每年都记得这一天</span></label><button class="green-button memory-add" id="addMemory">保存纪念日</button></section><section class="memory-list"><div class="section-title"><strong>被珍藏的日子</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => { const countdown = memoryCountdown(memory); return `<article class="memory-row"><div class="memory-date"><b>${escapeHtml(memory.date.slice(5).replace("-", "."))}</b><span>${memory.repeat ? "EVERY YEAR" : memory.date.slice(0, 4)}</span></div><div class="memory-copy"><strong>${escapeHtml(memory.name)}</strong><span>${countdown}</span></div><button data-delete-memory="${memory.id}" aria-label="删除纪念日">×</button></article>`; }).join("") || '<div class="empty-tool">往后的日子，会在这里慢慢长出来。</div>'}</section>`;
+  $("drawerContent").innerHTML = `<section class="memory-hero"><span class="memory-kicker">TOGETHER · ${escapeHtml(since)}</span><h3>你和 ${escapeHtml(state.loverName)} 已经相爱</h3><div class="memory-number">${Number.isFinite(days) ? days : "—"}</div><span class="memory-days">days</span><p>${escapeHtml(quote).replace(/\n/g, "<br>")}</p></section><section class="memory-date-setting">${inputField("我们从这一天开始", "date", state.anniversary, "anniversary")}</section><section class="drawer-section memory-quotes"><div class="section-title"><strong>纪念日文案</strong><span>每次进入随机显示</span></div><label class="field-label"><textarea id="newMemoryQuotes" placeholder="写下一句想在纪念日页面看见的话…&#10;可以一行添加一句"></textarea></label><button class="secondary-button memory-add" id="addMemoryQuotes">加入文案库</button><div class="quote-list">${state.memoryQuotes.map((item, index) => `<article><p>${escapeHtml(item)}</p><button data-delete-quote="${index}" aria-label="删除这句文案">×</button></article>`).join("")}</div></section><section class="drawer-section memory-create"><div class="section-title"><strong>新增纪念日</strong><span>时间坐标</span></div><div class="inline-form"><input id="memoryName" placeholder="为这一天取个名字"><input id="memoryDate" type="date"></div><label class="memory-repeat"><input id="memoryRepeat" type="checkbox" checked><i></i><span>每年重复</span></label><button class="green-button memory-add" id="addMemory">保存纪念日</button></section><section class="memory-list"><div class="section-title"><strong>纪念日记录</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => { const countdown = memoryCountdown(memory); return `<article class="memory-row"><div class="memory-date"><b>${escapeHtml(memory.date.slice(5).replace("-", "."))}</b><span>${memory.repeat ? "EVERY YEAR" : memory.date.slice(0, 4)}</span></div><div class="memory-copy"><strong>${escapeHtml(memory.name)}</strong><span>${countdown}</span></div><button data-delete-memory="${memory.id}" aria-label="删除纪念日">×</button></article>`; }).join("") || '<div class="empty-tool">还没有其他纪念日。</div>'}</section>`;
   bindSettingInputs();
   $("addMemoryQuotes").addEventListener("click", () => {
     const additions = $("newMemoryQuotes").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
@@ -359,7 +496,7 @@ function formatDelay(seconds) {
 }
 
 function renderAppearanceDrawer() {
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="section-title"><strong>双方资料</strong><span>仅保存在本机</span></div>${inputField("我的称呼", "text", state.myName, "myName")}${inputField("爱人的称呼", "text", state.loverName, "loverName")}<div class="avatar-settings"><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><span>替换我的头像</span><input type="file" accept="image/*" data-avatar="myAvatar"></label><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.loverAvatar, state.loverName)}</div><span>替换爱人头像</span><input type="file" accept="image/*" data-avatar="loverAvatar"></label></div></section><section class="drawer-section reply-delay-settings"><div class="section-title"><strong>回复等待时间</strong><span>区间内随机</span></div><p class="drawer-intro">点击手动回复后，等待时间会在最短与最长之间随机选择。</p><div class="range-field"><div class="range-head"><span>最短等待</span><b id="delayMinValue">${formatDelay(state.replyDelayMin)}</b></div><input id="delayMinRange" type="range" min="1" max="60" step="1" value="${state.replyDelayMin}"></div><div class="range-field"><div class="range-head"><span>最长等待</span><b id="delayMaxValue">${formatDelay(state.replyDelayMax)}</b></div><input id="delayMaxRange" type="range" min="1" max="120" step="1" value="${state.replyDelayMax}"></div><div class="delay-scale"><span>1 秒</span><span>1 分钟</span><span>2 分钟</span></div></section><section class="drawer-section"><div class="section-title"><strong>显示模式</strong></div><div class="theme-choice"><button data-theme-choice="light" class="${state.theme === "light" ? "active" : ""}">浅色</button><button data-theme-choice="dark" class="${state.theme === "dark" ? "active" : ""}">深色</button></div></section>`;
+  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="section-title"><strong>双方资料</strong><span>仅保存在本机</span></div>${inputField("我的称呼", "text", state.myName, "myName")}${inputField("爱人的称呼", "text", state.loverName, "loverName")}<div class="avatar-settings"><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><span>替换我的头像</span><input type="file" accept="image/*" data-avatar="myAvatar"></label><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.loverAvatar, state.loverName)}</div><span>替换爱人头像</span><input type="file" accept="image/*" data-avatar="loverAvatar"></label></div></section><section class="drawer-section background-settings"><div class="section-title"><strong>聊天背景</strong><span>消息区域</span></div><div class="background-preview" style="background-image:${safeImage(state.backgroundImage) ? `url('${state.backgroundImage}')` : "none"}"></div><div class="background-actions"><label class="wallpaper-button">更换壁纸<input id="backgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>聊天字体大小</span><b id="fontSizeValue">${state.fontSize}px</b></div><input id="fontSizeRange" type="range" min="12" max="22" value="${state.fontSize}"></div><div class="range-field"><div class="range-head"><span>气泡圆角</span><b id="radiusValue">${state.bubbleRadius}px</b></div><input id="radiusRange" type="range" min="0" max="18" value="${state.bubbleRadius}"></div><div class="range-field"><div class="range-head"><span>背景遮罩</span><b id="overlayValue">${state.backgroundOverlay}%</b></div><input id="overlayRange" type="range" min="0" max="75" value="${state.backgroundOverlay}"></div></section><section class="drawer-section reply-delay-settings"><div class="section-title"><strong>回复等待时间</strong><span>区间内随机</span></div><p class="drawer-intro">点击手动回复后，等待时间会在最短与最长之间随机选择。</p><div class="range-field"><div class="range-head"><span>最短等待</span><b id="delayMinValue">${formatDelay(state.replyDelayMin)}</b></div><input id="delayMinRange" type="range" min="1" max="60" step="1" value="${state.replyDelayMin}"></div><div class="range-field"><div class="range-head"><span>最长等待</span><b id="delayMaxValue">${formatDelay(state.replyDelayMax)}</b></div><input id="delayMaxRange" type="range" min="1" max="120" step="1" value="${state.replyDelayMax}"></div><div class="delay-scale"><span>1 秒</span><span>1 分钟</span><span>2 分钟</span></div></section><section class="drawer-section"><div class="section-title"><strong>显示模式</strong></div><div class="theme-choice"><button data-theme-choice="light" class="${state.theme === "light" ? "active" : ""}">浅色</button><button data-theme-choice="dark" class="${state.theme === "dark" ? "active" : ""}">深色</button></div></section>`;
   bindSettingInputs();
   document.querySelectorAll("[data-avatar]").forEach((input) => input.addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
@@ -374,6 +511,15 @@ function renderAppearanceDrawer() {
   $("delayMaxRange").addEventListener("input", (event) => {
     state.replyDelayMax = Math.max(state.replyDelayMin, Number(event.target.value));
     event.target.value = state.replyDelayMax; $("delayMaxValue").textContent = formatDelay(state.replyDelayMax); saveState();
+  });
+  $("backgroundFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    state.backgroundImage = await compressImage(file, 1800, 0.82);
+    if (saveState(false)) { applyAppearance(); renderAppearanceDrawer(); showToast("聊天背景已替换"); }
+  });
+  $("removeBackground").addEventListener("click", () => { state.backgroundImage = ""; saveState(); applyAppearance(); renderAppearanceDrawer(); showToast("已恢复默认背景"); });
+  [["fontSizeRange", "fontSize", "fontSizeValue", "px"], ["radiusRange", "bubbleRadius", "radiusValue", "px"], ["overlayRange", "backgroundOverlay", "overlayValue", "%"]].forEach(([id, key, output, unit]) => {
+    $(id).addEventListener("input", (event) => { state[key] = Number(event.target.value); $(output).textContent = `${state[key]}${unit}`; applyAppearance(); saveState(); });
   });
   document.querySelectorAll("[data-theme-choice]").forEach((button) => button.addEventListener("click", () => { state.theme = button.dataset.themeChoice; saveState(); applyAppearance(); renderAppearanceDrawer(); }));
 }
@@ -392,11 +538,11 @@ function renderBackgroundDrawer() {
 }
 
 function renderDataDrawer() {
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="save-line">✓ <span>聊天、字卡和图片已保存在当前浏览器</span></div><p class="drawer-intro">更换手机、浏览器或清理网站数据前，请先导出完整备份。</p><button class="export-button" id="exportButton">导出完整备份</button><label class="upload-box" style="margin-top:10px">导入备份文件<input id="importFile" type="file" accept="application/json"></label></section><section><div class="section-title"><strong>整理数据</strong><span>操作前建议备份</span></div><div class="button-row"><button class="secondary-button" id="clearHistory">清空聊天</button><button class="danger-button" id="resetAll">恢复初始状态</button></div></section>`;
+  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="save-line">✓ <span>聊天、字卡和图片已保存在当前浏览器</span></div><p class="drawer-intro">更换手机、浏览器或清理网站数据前，请先导出完整备份。</p><button class="export-button" id="exportButton">导出完整备份</button><label class="upload-box" style="margin-top:10px">导入备份文件<input id="importFile" type="file" accept="application/json"></label></section><section><div class="section-title"><strong>整理数据</strong><span>操作前建议备份</span></div><div class="button-row"><button class="secondary-button" id="clearHistory">清空全部对话</button><button class="danger-button" id="resetAll">恢复初始状态</button></div></section>`;
   $("exportButton").addEventListener("click", exportData);
   $("importFile").addEventListener("change", importData);
-  $("clearHistory").addEventListener("click", () => { if (!confirm("确定清空全部聊天记录吗？")) return; state.messages = []; saveState(); renderMessages(); showToast("聊天记录已清空"); });
-  $("resetAll").addEventListener("click", () => { if (!confirm("确定恢复初始状态吗？所有本机数据都会被覆盖。")) return; state = structuredClone(defaults); saveState(); applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); showToast("已恢复初始状态"); });
+  $("clearHistory").addEventListener("click", () => { if (!confirm("确定清空全部对话记录吗？")) return; state.conversations.forEach((conversation) => { conversation.messages = []; conversation.updatedAt = new Date().toISOString(); }); saveState(); renderMessages(); showToast("全部对话记录已清空"); });
+  $("resetAll").addEventListener("click", () => { if (!confirm("确定恢复初始状态吗？所有本机数据都会被覆盖。")) return; state = normalizeState({}); saveState(); applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("已恢复初始状态"); });
 }
 
 function bindSettingInputs() {
@@ -431,29 +577,27 @@ async function importData(event) {
   const file = event.target.files[0]; if (!file) return;
   try {
     const incoming = JSON.parse(await file.text());
-    if (!Array.isArray(incoming.messages) || !Array.isArray(incoming.cards)) throw new Error("invalid");
-    state = { ...structuredClone(defaults), ...incoming, version: 3 };
-    state.memoryQuotes = Array.isArray(incoming.memoryQuotes) && incoming.memoryQuotes.length ? incoming.memoryQuotes.map((quote) => String(quote).trim()).filter(Boolean) : structuredClone(defaults.memoryQuotes);
-    state.replyDelayMin = Math.min(60, Math.max(1, Number(incoming.replyDelayMin ?? defaults.replyDelayMin)));
-    state.replyDelayMax = Math.min(120, Math.max(state.replyDelayMin, Number(incoming.replyDelayMax ?? defaults.replyDelayMax)));
-    if (saveState(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); showToast("备份已恢复"); }
+    if (!Array.isArray(incoming.cards) || (!Array.isArray(incoming.messages) && !Array.isArray(incoming.conversations))) throw new Error("invalid");
+    state = normalizeState({ ...incoming, version: 3 });
+    if (saveState(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("备份已恢复"); }
   } catch { showToast("无法读取这个备份文件"); }
 }
 
 document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.tool)));
 document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
-$("profileButton").addEventListener("click", () => openTool("appearance"));
-$("chatInfoButton").addEventListener("click", () => openTool("background"));
+$("profileButton").addEventListener("click", () => openTool("memories"));
+$("chatInfoButton").addEventListener("click", openChatOptions);
+$("optionsClose").addEventListener("click", closeChatOptions);
+$("optionsScrim").addEventListener("click", closeChatOptions);
+$("toolScrim").addEventListener("click", () => openTool("chat"));
 $("drawerBack").addEventListener("click", () => {
-  if (window.matchMedia("(max-width: 760px)").matches && activeTool && activeTool !== "menu") openTool("menu");
+  if (window.matchMedia("(max-width: 760px)").matches && activeTool && activeTool !== "conversations") openTool("conversations");
   else openTool("chat");
 });
 $("drawerClose").addEventListener("click", () => openTool("chat"));
 $("themeButton").addEventListener("click", () => { state.theme = state.theme === "light" ? "dark" : "light"; saveState(); applyAppearance(); if (activeTool === "appearance") renderAppearanceDrawer(); });
-$("mobileMenu").addEventListener("click", () => openTool("menu"));
-$("draft").addEventListener("input", (event) => { $("sendButton").disabled = !event.target.value.trim(); });
+$("mobileMenu").addEventListener("click", () => openTool("conversations"));
 $("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } });
-$("sendButton").addEventListener("click", sendText);
 $("replyButton").addEventListener("click", requestReply);
 $("stickerButton").addEventListener("click", toggleStickerPopover);
 $("imageFile").addEventListener("change", sendImage);
@@ -461,9 +605,16 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".popover,.composer")) closePopovers();
   if (!event.target.closest("[data-message-row]")) document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
 });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && state.proactiveEnabled && state.nextProactiveAt <= Date.now()) deliverProactiveMessage();
+});
+window.addEventListener("resize", () => {
+  $("toolScrim").hidden = !(activeTool === "conversations" && window.matchMedia("(max-width: 760px)").matches);
+});
 
 applyAppearance();
 setMode(state.mode);
 renderMessages();
 saveState();
+scheduleProactive();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
