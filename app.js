@@ -50,6 +50,7 @@ let voiceStartedAt = 0;
 let voiceTimerHandle = null;
 let speechRecognition = null;
 let voiceCanceled = false;
+let voiceConversationId = null;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -330,11 +331,14 @@ function sendSticker(sticker) {
 async function sendImage(event) {
   const file = event.target.files[0];
   if (!file) return;
+  const conversation = currentConversation();
   if (file.size > 8 * 1024 * 1024) { showToast("图片太大，请选择 8MB 以内的图片"); event.target.value = ""; return; }
   try {
     const dataUrl = await compressImage(file, 1600, 0.84);
-    currentMessages().push({ id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() });
-    touchConversation(); if (saveState(false)) renderMessages();
+    const message = { id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() };
+    conversation.messages.push(message); conversation.updatedAt = new Date().toISOString();
+    if (!saveState(false)) conversation.messages = conversation.messages.filter((item) => item.id !== message.id);
+    else if (conversation.id === state.activeConversationId) renderMessages();
   } catch { showToast("这张图片暂时无法读取"); }
   event.target.value = "";
 }
@@ -360,6 +364,7 @@ async function startVoiceRecording() {
   try {
     voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     voiceChunks = []; voiceTranscript = ""; voiceCanceled = false;
+    voiceConversationId = state.activeConversationId;
     const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
     mediaRecorder = new MediaRecorder(voiceStream, preferred ? { mimeType: preferred } : undefined);
     mediaRecorder.addEventListener("dataavailable", (event) => { if (event.data.size) voiceChunks.push(event.data); });
@@ -370,10 +375,11 @@ async function startVoiceRecording() {
       if (voiceCanceled || !blob.size) return;
       if (blob.size > 2.8 * 1024 * 1024) { showToast("语音文件太大，请录制短一些"); return; }
       const dataUrl = await readAsDataUrl(blob);
+      const conversation = state.conversations.find((item) => item.id === voiceConversationId) || currentConversation();
       const message = { id: uid(), from: "me", type: "voice", content: "[语音]", transcript: voiceTranscript.trim(), dataUrl, createdAt: new Date().toISOString() };
-      currentMessages().push(message); touchConversation();
-      if (!saveState(false)) currentConversation().messages = currentMessages().filter((item) => item.id !== message.id);
-      else renderMessages();
+      conversation.messages.push(message); conversation.updatedAt = new Date().toISOString();
+      if (!saveState(false)) conversation.messages = conversation.messages.filter((item) => item.id !== message.id);
+      else if (conversation.id === state.activeConversationId) renderMessages();
     }, { once: true });
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (Recognition) {
@@ -404,15 +410,15 @@ function cancelVoiceRecording() {
   else { stopVoiceTracks(); $("voicePanel").hidden = true; }
 }
 
-function buildReplyItems(combined) {
-  const eligibleCards = state.cards.filter((card) => card.enabled && (state.mode === "random" ? card.random : card.response));
+function buildReplyItems(combined, conversationMessages = currentMessages(), mode = state.mode) {
+  const eligibleCards = state.cards.filter((card) => card.enabled && (mode === "random" ? card.random : card.response));
   const stickerItems = state.stickers.map((sticker) => ({ kind: "sticker", sticker }));
   let cardPool = eligibleCards;
-  if (state.mode === "response" && combined) {
+  if (mode === "response" && combined) {
     const matched = eligibleCards.filter((card) => card.triggers.some((word) => combined.includes(word)));
     if (matched.length) cardPool = matched;
   }
-  const recent = currentMessages().slice(-16).filter((message) => message.from === "lover").map((message) => message.content);
+  const recent = conversationMessages.slice(-16).filter((message) => message.from === "lover").map((message) => message.content);
   const freshCards = cardPool.filter((card) => !recent.includes(card.content));
   if (freshCards.length) cardPool = freshCards;
   const pool = [...cardPool.map((card) => ({ kind: "card", card })), ...stickerItems];
@@ -430,6 +436,8 @@ function buildReplyItems(combined) {
 
 function requestReply() {
   if (typing) return;
+  const replyConversation = currentConversation();
+  const replyMode = state.mode;
   const combined = pendingMessages().map((message) => message.content).join("\n");
   const quoteForReply = replyQuote ? { from: replyQuote.from, content: replyQuote.content } : null;
   replyQuote = null;
@@ -445,16 +453,16 @@ function requestReply() {
   setTimeout(() => {
     try {
       const now = Date.now();
-      buildReplyItems(combined).forEach((item, index) => {
+      buildReplyItems(combined, replyConversation.messages, replyMode).forEach((item, index) => {
         const quote = index === 0 && quoteForReply ? quoteForReply : undefined;
-        if (item.kind === "sticker") currentMessages().push({ id: uid(), from: "lover", type: "sticker", content: `[表情] ${item.sticker.name}`, dataUrl: item.sticker.dataUrl, quote, createdAt: new Date(now + index).toISOString() });
-        else currentMessages().push({ id: uid(), from: "lover", type: "text", content: item.card?.content || item.content, quote, createdAt: new Date(now + index).toISOString() });
+        if (item.kind === "sticker") replyConversation.messages.push({ id: uid(), from: "lover", type: "sticker", content: `[表情] ${item.sticker.name}`, dataUrl: item.sticker.dataUrl, quote, createdAt: new Date(now + index).toISOString() });
+        else replyConversation.messages.push({ id: uid(), from: "lover", type: "text", content: item.card?.content || item.content, quote, createdAt: new Date(now + index).toISOString() });
       });
     } finally {
       typing = false;
       $("typing").hidden = true;
       $("presence").textContent = "讯号在线";
-      touchConversation(); saveState();
+      replyConversation.updatedAt = new Date().toISOString(); saveState();
       renderMessages();
     }
   }, delay);
@@ -566,7 +574,7 @@ function renderCardsDrawer() {
     const duplicates = [...groups.entries()].filter(([, cards]) => cards.length > 1);
     $("duplicateResults").innerHTML = duplicates.length ? `<div class="duplicate-summary">发现 ${duplicates.length} 组重复内容</div>${duplicates.map(([content, cards]) => `<article><p>${escapeHtml(content)}</p><span>${cards.map((card) => escapeHtml(card.section)).join(" · ")} · 共 ${cards.length} 张</span></article>`).join("")}` : '<div class="duplicate-clean">✓ 没有发现重复字卡</div>';
   });
-  document.querySelectorAll("[data-card-field]").forEach((input) => input.addEventListener("change", (event) => {
+  document.querySelectorAll("[data-card-field]").forEach((input) => input.addEventListener(input.matches("textarea,input:not([type='checkbox'])") ? "input" : "change", (event) => {
     const card = state.cards.find((item) => item.id === event.target.closest("[data-card]").dataset.card);
     const field = event.target.dataset.cardField;
     if (!card) return;
