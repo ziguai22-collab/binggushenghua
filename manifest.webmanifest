@@ -4,7 +4,7 @@
   "description": "只属于两个人的本地字卡传讯窗口",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#ededeb",
-  "theme_color": "#252827",
+  "background_color": "#ededed",
+  "theme_color": "#2e2e2e",
   "icons": [{ "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
 }
