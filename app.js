@@ -25,6 +25,7 @@ const defaults = {
   messages: [{ id: "welcome", from: "lover", type: "text", content: "线路接通了。你想说什么都可以。", createdAt: new Date().toISOString() }],
 };
 
+const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let state = loadState();
 let activeTool = null;
 let typing = false;
@@ -32,7 +33,6 @@ let cardQuery = "";
 let toastTimer = null;
 
 const $ = (id) => document.getElementById(id);
-const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const safeImage = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : "";
 
@@ -48,7 +48,7 @@ function loadState() {
     })) : defaults.cards;
     migrated.memories = Array.isArray(saved.memories) ? saved.memories : defaults.memories;
     migrated.stickers = Array.isArray(saved.stickers) ? saved.stickers : [];
-    migrated.messages = Array.isArray(saved.messages) ? saved.messages.map((message) => ({ type: "text", ...message })) : defaults.messages;
+    migrated.messages = Array.isArray(saved.messages) ? saved.messages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) : defaults.messages;
     return migrated;
   } catch {
     return structuredClone(defaults);
@@ -98,17 +98,25 @@ function setMode(mode) {
   saveState();
 }
 
-function renderMessages() {
+function renderMessages(scrollToEnd = true) {
   $("messages").innerHTML = state.messages.map((message) => {
     const mine = message.from === "me";
     const time = new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    const content = message.type === "sticker" && safeImage(message.dataUrl)
-      ? `<div class="bubble sticker-bubble"><img src="${message.dataUrl}" alt="${escapeHtml(message.content || "表情")}"></div>`
+    const media = ["sticker", "image"].includes(message.type) && safeImage(message.dataUrl);
+    const content = media
+      ? `<div class="bubble media-bubble ${message.type === "sticker" ? "sticker-bubble" : "image-bubble"}"><img src="${message.dataUrl}" alt="${escapeHtml(message.content || (message.type === "image" ? "图片" : "表情"))}"></div>`
       : `<div class="bubble">${escapeHtml(message.content)}</div>`;
-    return `<article class="message-row ${mine ? "me" : "lover"}">${mine ? "" : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}<time>${time}</time></div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : ""}</article>`;
+    const remove = `<button class="message-delete" data-delete-message="${message.id}" aria-label="删除这条消息" title="删除这条消息"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button>`;
+    return `<article class="message-row ${mine ? "me" : "lover"}">${mine ? remove : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}<time>${time}</time></div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : remove}</article>`;
   }).join("");
+  document.querySelectorAll("[data-delete-message]").forEach((button) => button.addEventListener("click", () => {
+    if (!confirm("删除这条消息吗？")) return;
+    state.messages = state.messages.filter((message) => message.id !== button.dataset.deleteMessage);
+    saveState();
+    renderMessages(false);
+  }));
   updateReplyButton();
-  requestAnimationFrame(() => $("messageEnd").scrollIntoView({ behavior: "smooth" }));
+  if (scrollToEnd) requestAnimationFrame(() => $("messageEnd").scrollIntoView({ behavior: "smooth" }));
 }
 
 function pendingMessages() {
@@ -137,6 +145,18 @@ function sendSticker(sticker) {
   saveState();
   closePopovers();
   renderMessages();
+}
+
+async function sendImage(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { showToast("图片太大，请选择 8MB 以内的图片"); event.target.value = ""; return; }
+  try {
+    const dataUrl = await compressImage(file, 1600, 0.84);
+    state.messages.push({ id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() });
+    if (saveState(false)) renderMessages();
+  } catch { showToast("这张图片暂时无法读取"); }
+  event.target.value = "";
 }
 
 function requestReply() {
@@ -168,30 +188,14 @@ function requestReply() {
 }
 
 function closePopovers() {
-  $("emojiPopover").hidden = true;
   $("stickerPopover").hidden = true;
-}
-
-function toggleEmoji() {
-  const popover = $("emojiPopover");
-  const emojis = ["微笑", "开心", "难过", "委屈", "生气", "爱心", "拥抱", "晚安", "想你", "亲亲", "害羞", "发呆", "叹气", "加油", "收到", "好的"];
-  const symbols = ["🙂", "😄", "😔", "🥺", "😠", "❤️", "🫂", "🌙", "💭", "😘", "☺️", "😶", "😮‍💨", "💪", "👌", "好"];
-  $("stickerPopover").hidden = true;
-  popover.innerHTML = `<div class="emoji-grid">${symbols.map((symbol, index) => `<button title="${emojis[index]}" data-emoji="${symbol}">${symbol}</button>`).join("")}</div>`;
-  popover.hidden = !popover.hidden;
-  popover.querySelectorAll("[data-emoji]").forEach((button) => button.addEventListener("click", () => {
-    $("draft").value += button.dataset.emoji;
-    $("sendButton").disabled = false;
-    $("draft").focus();
-  }));
 }
 
 function toggleStickerPopover() {
   const popover = $("stickerPopover");
-  $("emojiPopover").hidden = true;
   popover.innerHTML = state.stickers.length
     ? `<div class="chat-sticker-grid">${state.stickers.map((sticker) => `<button data-send-sticker="${sticker.id}" title="${escapeHtml(sticker.name)}"><img src="${sticker.dataUrl}" alt="${escapeHtml(sticker.name)}"></button>`).join("")}</div>`
-    : '<div class="popover-empty">还没有表情包，请从左侧“表情”上传。</div>';
+    : '<div class="popover-empty">还没有表情包，请先从功能菜单上传。</div>';
   popover.hidden = !popover.hidden;
   popover.querySelectorAll("[data-send-sticker]").forEach((button) => button.addEventListener("click", () => {
     const sticker = state.stickers.find((item) => item.id === button.dataset.sendSticker);
@@ -243,7 +247,7 @@ function renderCardsDrawer() {
   $("drawerContent").innerHTML = `
     <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="今天也有好好想你。&#10;慢慢来，我一直都在。"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
     <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
-    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea data-card-field="content">${escapeHtml(card.content)}</textarea><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"><div class="card-edit-actions"><div class="check-group"><label><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}>随机</label><label><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}>回应</label><label><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}>启用</label></div><button class="danger-button small-button" data-delete-card="${card.id}">删除</button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
+    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list card-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label></div><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
   $("addBulkCards").addEventListener("click", () => {
     const lines = $("bulkCards").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     lines.forEach((content) => state.cards.push({ id: uid(), section: $("bulkSection").value, content, triggers: [], random: true, response: true, enabled: true }));
@@ -275,14 +279,13 @@ function renderCardsDrawer() {
 }
 
 function renderStickersDrawer() {
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="section-title"><strong>上传表情包</strong><span>支持 PNG、JPG、GIF、WebP</span></div><label class="field-label"><span>默认分组</span><input id="stickerGroup" value="日常"></label><label class="upload-box">选择一张或多张图片<input id="stickerFiles" type="file" accept="image/*" multiple></label></section><section><div class="section-title"><strong>我的表情</strong><span>${state.stickers.length} 张</span></div>${state.stickers.length ? `<div class="sticker-grid">${state.stickers.map((sticker) => `<article class="sticker-card" data-sticker="${sticker.id}"><img src="${sticker.dataUrl}" alt="${escapeHtml(sticker.name)}"><button data-delete-sticker="${sticker.id}" title="删除">×</button><input data-sticker-field="name" value="${escapeHtml(sticker.name)}"><input data-sticker-field="group" value="${escapeHtml(sticker.group || "日常")}" placeholder="分组"></article>`).join("")}</div>` : '<div class="empty-tool">还没有表情包。上传后可直接从聊天输入区发送。</div>'}</section>`;
+  $("drawerContent").innerHTML = `<section class="drawer-section sticker-upload-section"><div class="section-title"><strong>表情包</strong><span>支持 PNG、JPG、GIF、WebP</span></div><p class="drawer-intro">上传后会直接出现在聊天输入栏的笑脸按钮里，不需要再分类。</p><label class="upload-box">＋ 选择一张或多张图片<input id="stickerFiles" type="file" accept="image/*" multiple></label></section><section><div class="section-title"><strong>已保存</strong><span>${state.stickers.length} 张</span></div>${state.stickers.length ? `<div class="sticker-grid">${state.stickers.map((sticker) => `<article class="sticker-card" data-sticker="${sticker.id}"><img src="${sticker.dataUrl}" alt="${escapeHtml(sticker.name)}"><button data-delete-sticker="${sticker.id}" title="删除" aria-label="删除表情">×</button><input data-sticker-field="name" value="${escapeHtml(sticker.name)}" aria-label="表情名称"></article>`).join("")}</div>` : '<div class="empty-tool">还没有表情包。上传后可直接从聊天输入区发送。</div>'}</section>`;
   $("stickerFiles").addEventListener("change", async (event) => {
     const files = [...event.target.files];
-    const group = $("stickerGroup").value.trim() || "日常";
     for (const file of files) {
       if (file.size > 1.5 * 1024 * 1024) { showToast(`${file.name} 超过 1.5MB，已跳过`); continue; }
       const dataUrl = await readAsDataUrl(file);
-      state.stickers.push({ id: uid(), name: file.name.replace(/\.[^.]+$/, ""), group, dataUrl });
+      state.stickers.push({ id: uid(), name: file.name.replace(/\.[^.]+$/, ""), dataUrl });
     }
     if (saveState(false)) { showToast(`已上传 ${files.length} 张表情`); renderStickersDrawer(); }
   });
@@ -297,14 +300,28 @@ function renderStickersDrawer() {
 
 function renderMemoriesDrawer() {
   const days = Math.max(1, Math.floor((Date.now() - new Date(`${state.anniversary}T00:00:00`).getTime()) / 86400000) + 1);
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="memory-count"><strong>${Number.isFinite(days) ? days : "—"}</strong><span>相爱的日子</span></div>${inputField("相爱起始日", "date", state.anniversary, "anniversary")}</section><section class="drawer-section"><div class="section-title"><strong>新增纪念日</strong><span>可以继续添加</span></div><div class="inline-form"><input id="memoryName" placeholder="名称"><input id="memoryDate" type="date"></div><button class="green-button" id="addMemory">添加纪念日</button></section><section><div class="section-title"><strong>纪念日列表</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => `<article class="memory-row"><div><strong>${escapeHtml(memory.name)}</strong><span>${escapeHtml(memory.date)} · ${memory.repeat ? "每年重复" : "仅一次"}</span></div><button data-delete-memory="${memory.id}">删除</button></article>`).join("") || '<div class="empty-tool">还没有纪念日。</div>'}</section>`;
+  const since = state.anniversary ? state.anniversary.replaceAll("-", " · ") : "尚未设定";
+  $("drawerContent").innerHTML = `<section class="memory-hero"><span class="memory-kicker">TOGETHER · SINCE</span><div class="memory-flourish">❦</div><div class="memory-number">${Number.isFinite(days) ? days : "—"}</div><span class="memory-days">days</span><p>相爱不是某一个瞬间，<br>是每一个普通日子都被好好记住。</p><small>${escapeHtml(since)}</small></section><section class="memory-date-setting">${inputField("我们从这一天开始", "date", state.anniversary, "anniversary")}</section><section class="drawer-section memory-create"><div class="section-title"><strong>再留下一枚时间坐标</strong><span>纪念日</span></div><div class="inline-form"><input id="memoryName" placeholder="为这一天取个名字"><input id="memoryDate" type="date"></div><label class="memory-repeat"><input id="memoryRepeat" type="checkbox" checked><i></i><span>每年都记得这一天</span></label><button class="green-button memory-add" id="addMemory">保存纪念日</button></section><section class="memory-list"><div class="section-title"><strong>被珍藏的日子</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => { const countdown = memoryCountdown(memory); return `<article class="memory-row"><div class="memory-date"><b>${escapeHtml(memory.date.slice(5).replace("-", "."))}</b><span>${memory.repeat ? "EVERY YEAR" : memory.date.slice(0, 4)}</span></div><div class="memory-copy"><strong>${escapeHtml(memory.name)}</strong><span>${countdown}</span></div><button data-delete-memory="${memory.id}" aria-label="删除纪念日">×</button></article>`; }).join("") || '<div class="empty-tool">往后的日子，会在这里慢慢长出来。</div>'}</section>`;
   bindSettingInputs();
   $("addMemory").addEventListener("click", () => {
     const name = $("memoryName").value.trim(); const date = $("memoryDate").value;
     if (!name || !date) { showToast("请填写名称和日期"); return; }
-    state.memories.push({ id: uid(), name, date, repeat: true }); saveState(); renderMemoriesDrawer();
+    state.memories.push({ id: uid(), name, date, repeat: $("memoryRepeat").checked }); saveState(); renderMemoriesDrawer();
   });
   document.querySelectorAll("[data-delete-memory]").forEach((button) => button.addEventListener("click", () => { state.memories = state.memories.filter((item) => item.id !== button.dataset.deleteMemory); saveState(); renderMemoriesDrawer(); }));
+}
+
+function memoryCountdown(memory) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const parts = String(memory.date || "").split("-").map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return "等待日期被补全";
+  let target = memory.repeat ? new Date(today.getFullYear(), parts[1] - 1, parts[2]) : new Date(parts[0], parts[1] - 1, parts[2]);
+  if (memory.repeat && target < today) target = new Date(today.getFullYear() + 1, parts[1] - 1, parts[2]);
+  const distance = Math.round((target - today) / 86400000);
+  if (distance === 0) return "就是今天";
+  if (distance > 0) return `还有 ${distance} 天抵达`;
+  return `已经珍藏 ${Math.abs(distance)} 天`;
 }
 
 function renderAppearanceDrawer() {
@@ -341,7 +358,9 @@ function renderDataDrawer() {
 
 function bindSettingInputs() {
   document.querySelectorAll("[data-setting]").forEach((input) => input.addEventListener("change", (event) => {
-    state[event.target.dataset.setting] = event.target.value; saveState(); applyAppearance(); renderMessages();
+    const key = event.target.dataset.setting;
+    state[key] = event.target.value; saveState(); applyAppearance(); renderMessages();
+    if (key === "anniversary" && activeTool === "memories") renderMemoriesDrawer();
   }));
 }
 
@@ -390,9 +409,9 @@ $("draft").addEventListener("input", (event) => { $("sendButton").disabled = !ev
 $("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } });
 $("sendButton").addEventListener("click", sendText);
 $("replyButton").addEventListener("click", requestReply);
-$("emojiButton").addEventListener("click", toggleEmoji);
 $("stickerButton").addEventListener("click", toggleStickerPopover);
-document.addEventListener("click", (event) => { if (!event.target.closest(".popover,.composer-tools")) closePopovers(); });
+$("imageFile").addEventListener("change", sendImage);
+document.addEventListener("click", (event) => { if (!event.target.closest(".popover,.composer")) closePopovers(); });
 
 applyAppearance();
 setMode(state.mode);
