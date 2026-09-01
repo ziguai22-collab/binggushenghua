@@ -1,5 +1,5 @@
-const CACHE="binggushenghua-pages-v26";
-const ASSETS=["./","./index.html","./styles-v26.css","./app-v26.js","./favicon.svg"];
+const CACHE="binggushenghua-pages-v27";
+const ASSETS=["./","./index.html","./styles-v27.css","./app-v27.js","./favicon.svg"];
 self.addEventListener("install",event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener("activate",event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
 self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;event.respondWith(fetch(event.request).then(response=>{const copy=response.clone();caches.open(CACHE).then(cache=>cache.put(event.request,copy));return response}).catch(()=>caches.match(event.request).then(hit=>hit||caches.match("./"))))});
