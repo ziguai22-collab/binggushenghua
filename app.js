@@ -4,7 +4,7 @@ const DB_NAME = "binggushenghua-local";
 const DB_STORE = "app-state";
 const DB_KEY = "current";
 const defaults = {
-  version: 8,
+  version: 9,
   theme: "light",
   myName: "我",
   loverName: "对方",
@@ -15,6 +15,9 @@ const defaults = {
   sidebarBackgroundImage: "",
   sidebarBackgroundBlur: 0,
   fontSize: 14,
+  customFontData: "",
+  customFontUrl: "",
+  customFontName: "",
   bubbleRadius: 4,
   myBubbleColor: "",
   myBubbleTextColor: "",
@@ -60,11 +63,19 @@ let storageMode = "indexedDB";
 let saveTimer = null;
 let saveQueue = Promise.resolve(true);
 let saveRevision = 0;
+let appliedFontSource = "";
+let activeCustomFontFace = null;
+let fontLoadToken = 0;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const safeImage = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : "";
 const safeColor = (value) => /^#[0-9a-f]{6}$/i.test(value || "") ? value.toLowerCase() : "";
+const safeFontData = (value) => typeof value === "string" && /^data:(font\/|application\/(font|x-font|octet-stream))/i.test(value) && value.length <= 12 * 1024 * 1024 ? value : "";
+const safeFontUrl = (value) => {
+  try { const url = new URL(String(value || "").trim()); return url.protocol === "https:" ? url.href : ""; }
+  catch { return ""; }
+};
 
 function currentConversation() {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || state.conversations[0];
@@ -109,6 +120,9 @@ function normalizeState(saved = {}) {
     migrated.memoryTextColor = /^#[0-9a-f]{6}$/i.test(saved.memoryTextColor || "") ? saved.memoryTextColor : defaults.memoryTextColor;
     migrated.sidebarBackgroundImage = safeImage(saved.sidebarBackgroundImage);
     migrated.sidebarBackgroundBlur = Math.min(24, Math.max(0, Number(saved.sidebarBackgroundBlur ?? defaults.sidebarBackgroundBlur)));
+    migrated.customFontData = safeFontData(saved.customFontData);
+    migrated.customFontUrl = migrated.customFontData ? "" : safeFontUrl(saved.customFontUrl);
+    migrated.customFontName = typeof saved.customFontName === "string" ? saved.customFontName.slice(0, 120) : "";
     ["myBubbleColor", "myBubbleTextColor", "loverBubbleColor", "loverBubbleTextColor"].forEach((key) => { migrated[key] = safeColor(saved[key]); });
     migrated.replyDelayMin = Math.min(60, Math.max(1, Number(saved.replyDelayMin ?? defaults.replyDelayMin)));
     migrated.replyDelayMax = Math.min(120, Math.max(migrated.replyDelayMin, Number(saved.replyDelayMax ?? defaults.replyDelayMax)));
@@ -131,7 +145,7 @@ function normalizeState(saved = {}) {
     migrated.lastWelcomeMessage = typeof saved.lastWelcomeMessage === "string" ? saved.lastWelcomeMessage : "";
     migrated.lastSavedAt = typeof saved.lastSavedAt === "string" ? saved.lastSavedAt : "";
     migrated.lastBackupAt = typeof saved.lastBackupAt === "string" ? saved.lastBackupAt : "";
-    migrated.version = 8;
+    migrated.version = 9;
     delete migrated.messages;
     delete migrated.sectionCombos;
     return migrated;
@@ -333,6 +347,27 @@ function shownBubbleColor(key) {
   return safeColor(state[key]) || defaultBubbleColors()[key];
 }
 
+async function applyGlobalFont() {
+  const source = safeFontData(state.customFontData) || safeFontUrl(state.customFontUrl);
+  if (source === appliedFontSource) return true;
+  const token = ++fontLoadToken;
+  if (!source) {
+    if (activeCustomFontFace) document.fonts.delete(activeCustomFontFace);
+    activeCustomFontFace = null; appliedFontSource = "";
+    document.documentElement.style.removeProperty("--global-font");
+    return true;
+  }
+  try {
+    const face = new FontFace("UserGlobalFont", `url(${JSON.stringify(source)})`, { display: "swap" });
+    await face.load();
+    if (token !== fontLoadToken) return false;
+    if (activeCustomFontFace) document.fonts.delete(activeCustomFontFace);
+    document.fonts.add(face); activeCustomFontFace = face; appliedFontSource = source;
+    document.documentElement.style.setProperty("--global-font", '"UserGlobalFont","PingFang SC","Microsoft YaHei",system-ui,sans-serif');
+    return true;
+  } catch { return false; }
+}
+
 function applyAppearance() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.style.setProperty("--chat-font-size", `${state.fontSize}px`);
@@ -344,6 +379,7 @@ function applyAppearance() {
   document.documentElement.style.setProperty("--friend-ink", shownBubbleColor("loverBubbleTextColor"));
   document.documentElement.style.setProperty("--sidebar-blur", `${state.sidebarBackgroundBlur}px`);
   document.documentElement.style.setProperty("--sidebar-wallpaper", safeImage(state.sidebarBackgroundImage) ? `url("${state.sidebarBackgroundImage}")` : "none");
+  void applyGlobalFont();
   $("messageList").style.backgroundImage = safeImage(state.backgroundImage) ? `url("${state.backgroundImage}")` : "";
   [$("toolDrawer"), $("chatOptions")].forEach((drawer) => drawer.classList.toggle("has-sidebar-wallpaper", Boolean(safeImage(state.sidebarBackgroundImage))));
   $("themeButton").innerHTML = state.theme === "light" ? '<svg viewBox="0 0 24 24"><path d="M18 15a7 7 0 0 1-9-9 7 7 0 1 0 9 9Z"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>';
@@ -428,7 +464,9 @@ function renderMessages(scrollToEnd = true) {
     const image = ["sticker", "image"].includes(message.type) && safeImage(message.dataUrl);
     const content = image
       ? `${quote}<div class="bubble media-bubble ${message.type === "sticker" ? "sticker-bubble" : "image-bubble"}"><img src="${message.dataUrl}" alt="${escapeHtml(message.content || (message.type === "image" ? "图片" : "表情"))}"></div>`
-      : `<div class="bubble">${quote}${escapeHtml(message.content)}</div>`;
+      : quote
+        ? `<div class="bubble has-quote">${quote}<div class="bubble-text">${escapeHtml(message.content)}</div></div>`
+        : `<div class="bubble">${escapeHtml(message.content)}</div>`;
     const actions = `<div class="message-actions"><button class="message-delete" data-delete-message="${message.id}" aria-label="删除这条消息" title="删除这条消息"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div>`;
     return `${divider}<article class="message-row ${mine ? "me" : "lover"}" data-message-row="${message.id}">${mine ? actions : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}</div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : actions}</article>`;
   }).join("");
@@ -857,6 +895,7 @@ function colorSettingHtml(label, key) {
 function renderAppearanceDrawer() {
   $("drawerContent").innerHTML = `
     <section class="drawer-section"><div class="section-title"><strong>双方资料</strong><span>仅保存在本机</span></div>${inputField("我的称呼", "text", state.myName, "myName")}${inputField("爱人的称呼", "text", state.loverName, "loverName")}<div class="avatar-settings"><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><span>替换我的头像</span><input type="file" accept="image/*" data-avatar="myAvatar"></label><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.loverAvatar, state.loverName)}</div><span>替换爱人头像</span><input type="file" accept="image/*" data-avatar="loverAvatar"></label></div></section>
+    <section class="drawer-section custom-font-settings"><div class="section-title"><strong>全局字体</strong><span>保留纪念日花体</span></div><div class="font-live-preview"><b>Aa 你好，今天也在这里。</b><span>${escapeHtml(state.customFontName || "当前使用系统默认字体")}</span></div><div class="background-actions"><label class="wallpaper-button">上传字体文件<input id="customFontFile" type="file" accept=".ttf,.otf,.woff,.woff2,font/*"></label><button class="restore-button" id="removeCustomFont">恢复默认</button></div><label class="field-label"><span>字体文件直链（HTTPS，支持 TTF、OTF、WOFF、WOFF2）</span><input id="customFontUrl" type="url" value="${escapeHtml(state.customFontUrl)}" placeholder="https://example.com/font.woff2"></label><button class="secondary-button font-url-apply" id="applyFontUrl">应用字体链接</button><p class="font-help">仅替换全站普通文字；纪念日数字、英文装饰和原有花体保持不变。</p></section>
     <section class="drawer-section background-settings"><div class="section-title"><strong>聊天外观</strong><span>消息区域</span></div><div class="background-preview" style="background-image:${safeImage(state.backgroundImage) ? `url('${state.backgroundImage}')` : "none"}"></div><div class="background-actions"><label class="wallpaper-button">更换聊天壁纸<input id="backgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>聊天字体大小</span><b id="fontSizeValue">${state.fontSize}px</b></div><input id="fontSizeRange" type="range" min="12" max="22" value="${state.fontSize}"></div><div class="range-field"><div class="range-head"><span>气泡圆角</span><b id="radiusValue">${state.bubbleRadius}px</b></div><input id="radiusRange" type="range" min="0" max="18" value="${state.bubbleRadius}"></div><div class="range-field"><div class="range-head"><span>背景遮罩</span><b id="overlayValue">${state.backgroundOverlay}%</b></div><input id="overlayRange" type="range" min="0" max="75" value="${state.backgroundOverlay}"></div><div class="bubble-color-grid">${colorSettingHtml("我的气泡", "myBubbleColor")}${colorSettingHtml("我的文字", "myBubbleTextColor")}${colorSettingHtml("他的气泡", "loverBubbleColor")}${colorSettingHtml("他的文字", "loverBubbleTextColor")}</div><button class="restore-button color-reset" id="resetBubbleColors">恢复默认气泡配色</button></section>
     <section class="drawer-section sidebar-background-settings"><div class="section-title"><strong>侧边栏壁纸</strong><span>同时作用于左右两侧</span></div><div class="sidebar-background-preview ${safeImage(state.sidebarBackgroundImage) ? "has-image" : ""}" style="--preview-sidebar-image:${safeImage(state.sidebarBackgroundImage) ? `url('${state.sidebarBackgroundImage}')` : "none"};--preview-sidebar-blur:${state.sidebarBackgroundBlur}px"><i></i><span>左侧栏</span><span>右侧栏</span></div><div class="background-actions"><label class="wallpaper-button">更换侧栏壁纸<input id="sidebarBackgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeSidebarBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>壁纸模糊度</span><b id="sidebarBlurValue">${state.sidebarBackgroundBlur}px</b></div><input id="sidebarBlurRange" type="range" min="0" max="24" step="1" value="${state.sidebarBackgroundBlur}"></div></section>
     <section class="drawer-section intro-settings"><div class="section-title"><strong>开屏与欢迎语</strong><span>Canvas 蝴蝶动画</span></div><label class="option-toggle intro-toggle"><span><b>显示开屏动画</b><small>每次重新进入时播放</small></span><input id="introEnabled" type="checkbox" ${state.introEnabled ? "checked" : ""}><i></i></label><label class="field-label"><span>随机欢迎语，一行一句</span><textarea id="welcomeMessagesText" placeholder="欢迎回来。讯号已经接通。">${escapeHtml(state.welcomeMessages.join("\n"))}</textarea></label><button class="secondary-button memory-add" id="saveWelcomeMessages">保存欢迎语</button></section>
@@ -871,6 +910,37 @@ function renderAppearanceDrawer() {
     if (await saveStateNow(false)) { applyAppearance(); renderMessages(); renderAppearanceDrawer(); showToast("头像已替换"); }
     else state[key] = previous;
   }));
+  $("customFontFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    if (!/\.(ttf|otf|woff2?)$/i.test(file.name)) { showToast("请选择 TTF、OTF、WOFF 或 WOFF2 字体文件"); return; }
+    if (file.size > 8 * 1024 * 1024) { showToast("字体文件请控制在 8MB 以内"); return; }
+    const previous = { data: state.customFontData, url: state.customFontUrl, name: state.customFontName };
+    state.customFontData = await readAsDataUrl(file); state.customFontUrl = ""; state.customFontName = file.name;
+    if (!await applyGlobalFont()) {
+      state.customFontData = previous.data; state.customFontUrl = previous.url; state.customFontName = previous.name; await applyGlobalFont();
+      showToast("字体无法读取，请换一个字体文件"); return;
+    }
+    if (await saveStateNow(false)) { renderAppearanceDrawer(); showToast("全局字体已更新"); }
+    else { state.customFontData = previous.data; state.customFontUrl = previous.url; state.customFontName = previous.name; await applyGlobalFont(); }
+  });
+  $("applyFontUrl").addEventListener("click", async () => {
+    const url = safeFontUrl($("customFontUrl").value);
+    if (!url) { showToast("请输入 HTTPS 字体文件直链"); return; }
+    const previous = { data: state.customFontData, url: state.customFontUrl, name: state.customFontName };
+    let filename = "链接字体";
+    try { filename = decodeURIComponent(new URL(url).pathname.split("/").pop() || filename); } catch {}
+    state.customFontData = ""; state.customFontUrl = url; state.customFontName = filename;
+    if (!await applyGlobalFont()) {
+      state.customFontData = previous.data; state.customFontUrl = previous.url; state.customFontName = previous.name; await applyGlobalFont();
+      showToast("字体链接加载失败，请确认它是允许跨域访问的字体文件直链"); return;
+    }
+    if (await saveStateNow(false)) { renderAppearanceDrawer(); showToast("链接字体已应用"); }
+    else { state.customFontData = previous.data; state.customFontUrl = previous.url; state.customFontName = previous.name; await applyGlobalFont(); }
+  });
+  $("removeCustomFont").addEventListener("click", async () => {
+    state.customFontData = ""; state.customFontUrl = ""; state.customFontName = "";
+    await applyGlobalFont(); saveState(); renderAppearanceDrawer(); showToast("已恢复系统默认字体");
+  });
   $("delayMinRange").addEventListener("input", (event) => {
     state.replyDelayMin = Number(event.target.value);
     if (state.replyDelayMax < state.replyDelayMin) { state.replyDelayMax = state.replyDelayMin; $("delayMaxRange").value = state.replyDelayMax; }
