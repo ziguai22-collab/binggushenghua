@@ -10,10 +10,10 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles.css?v=25" />
+  <link rel="stylesheet" href="./styles-v26.css" />
   <script>
     (() => {
-      const release = "25";
+      const release = "26";
       try {
         if (sessionStorage.getItem("binggushenghua-release") === release) return;
         sessionStorage.setItem("binggushenghua-release", release);
@@ -60,6 +60,8 @@
     </aside>
 
     <section class="chat-window">
+      <div class="chat-wallpaper-layer" id="chatWallpaper" aria-hidden="true"></div>
+      <div class="chat-wallpaper-veil" aria-hidden="true"></div>
       <header class="chat-topbar">
         <button class="mobile-menu-button" id="mobileMenu" aria-label="打开功能菜单"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div class="chat-person"><strong id="loverName">对方</strong><span id="presence" hidden>讯号在线</span></div>
@@ -84,6 +86,6 @@
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app.js?v=25" defer></script>
+  <script src="./app-v26.js" defer></script>
 </body>
 </html>
