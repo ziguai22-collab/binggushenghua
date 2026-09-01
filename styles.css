@@ -56,3 +56,9 @@
   .card-meta-row{grid-template-columns:84px minmax(0,1fr)}.check-group{gap:8px}.card-edit{padding:12px}.memory-hero{min-height:288px;padding:28px 20px 22px}.memory-number{font-size:78px}.memory-hero p{font-size:11px}
 }
 @media(max-width:360px){.composer{gap:3px;padding-left:5px;padding-right:5px}.composer-icon{width:28px;flex-basis:28px}.send-button{min-width:40px;padding:0 6px}.reply-trigger{width:34px;height:34px;flex-basis:34px}.message-body{max-width:70%}}
+
+[hidden]{display:none!important}.typing-row[hidden]{display:none!important}
+.message-body .bubble{cursor:pointer}.message-delete{display:none;opacity:.55;pointer-events:auto}.message-row.actions-open .message-delete{display:grid}.message-row:hover .message-delete{opacity:.55}
+.reply-delay-settings .range-field{margin:18px 0}.reply-delay-settings input[type="range"]{height:4px}.delay-scale{display:flex;justify-content:space-between;margin-top:-5px;color:var(--muted);font-size:8px}.delay-scale span:nth-child(2){margin-left:24%}
+.memory-quotes .field-label{margin-bottom:9px}.memory-quotes textarea{min-height:74px}.quote-list{display:grid;gap:7px;margin-top:13px}.quote-list article{display:grid;grid-template-columns:1fr 24px;gap:8px;align-items:center;padding:10px 11px;border-radius:7px;background:var(--hover)}.quote-list p{margin:0;font-family:"Songti SC","STSong",serif;font-size:11px;line-height:1.7;white-space:pre-wrap}.quote-list button{width:24px;height:24px;border:0;background:transparent;color:#b39d99;font-size:17px}
+@media(max-width:760px){.message-delete{display:none;width:20px;flex-basis:20px;opacity:.5}.message-row.actions-open .message-delete{display:grid}.reply-delay-settings .range-field{margin:20px 0}.quote-list p{font-size:12px}}
