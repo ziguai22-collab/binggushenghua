@@ -289,7 +289,16 @@ function renderMessages(scrollToEnd = true) {
     document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
   }));
   updateReplyButton();
-  if (scrollToEnd) requestAnimationFrame(() => $("messageEnd").scrollIntoView({ behavior: "smooth" }));
+  if (scrollToEnd) scrollMessagesToEnd();
+}
+
+function scrollMessagesToEnd() {
+  requestAnimationFrame(() => {
+    const list = $("messageList");
+    if (!list) return;
+    if (typeof list.scrollTo === "function") list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+    else list.scrollTop = list.scrollHeight;
+  });
 }
 
 function renderQuoteComposer() {
@@ -446,7 +455,7 @@ function requestReply() {
   $("typing").hidden = false;
   $("presence").textContent = "正在输入…";
   updateReplyButton();
-  requestAnimationFrame(() => $("messageEnd").scrollIntoView({ behavior: "smooth" }));
+  scrollMessagesToEnd();
   const minimum = Math.min(60, Math.max(1, Number(state.replyDelayMin || 1)));
   const maximum = Math.min(120, Math.max(minimum, Number(state.replyDelayMax || minimum)));
   const delay = Math.round((minimum + Math.random() * (maximum - minimum)) * 1000);
