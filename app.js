@@ -4,7 +4,7 @@ const DB_NAME = "binggushenghua-local";
 const DB_STORE = "app-state";
 const DB_KEY = "current";
 const defaults = {
-  version: 7,
+  version: 8,
   theme: "light",
   myName: "我",
   loverName: "对方",
@@ -42,6 +42,7 @@ const defaults = {
   memories: [],
   memoryQuotes: ["在这里添加你想随机显示的纪念日文案。"],
   sections: ["日常", "想念", "安慰", "睡前"],
+  sectionSettings: {},
   cards: [],
   stickers: [],
   messages: [],
@@ -87,6 +88,20 @@ function normalizeState(saved = {}) {
       random: card.random !== false, response: card.response !== false, enabled: card.enabled !== false,
       combo: card.combo === true,
     })) : structuredClone(defaults.cards);
+    const savedSectionSettings = saved.sectionSettings && typeof saved.sectionSettings === "object" ? saved.sectionSettings : {};
+    migrated.sectionSettings = {};
+    migrated.sections.forEach((section) => {
+      const cards = migrated.cards.filter((card) => card.section === section);
+      const previous = savedSectionSettings[section] || {};
+      const settings = {
+        random: typeof previous.random === "boolean" ? previous.random : (cards.length ? cards.some((card) => card.random) : true),
+        response: typeof previous.response === "boolean" ? previous.response : (cards.length ? cards.some((card) => card.response) : true),
+        enabled: typeof previous.enabled === "boolean" ? previous.enabled : (cards.length ? cards.some((card) => card.enabled) : true),
+        combo: typeof previous.combo === "boolean" ? previous.combo : cards.some((card) => card.combo),
+      };
+      migrated.sectionSettings[section] = settings;
+      cards.forEach((card) => Object.assign(card, settings));
+    });
     migrated.memories = Array.isArray(saved.memories) ? saved.memories : structuredClone(defaults.memories);
     migrated.memoryQuotes = Array.isArray(saved.memoryQuotes) && saved.memoryQuotes.some((quote) => String(quote).trim()) ? saved.memoryQuotes.map((quote) => String(quote).trim()).filter(Boolean) : structuredClone(defaults.memoryQuotes);
     migrated.memoryBackgroundImage = typeof saved.memoryBackgroundImage === "string" && saved.memoryBackgroundImage.startsWith("data:image/") ? saved.memoryBackgroundImage : "";
@@ -116,7 +131,7 @@ function normalizeState(saved = {}) {
     migrated.lastWelcomeMessage = typeof saved.lastWelcomeMessage === "string" ? saved.lastWelcomeMessage : "";
     migrated.lastSavedAt = typeof saved.lastSavedAt === "string" ? saved.lastSavedAt : "";
     migrated.lastBackupAt = typeof saved.lastBackupAt === "string" ? saved.lastBackupAt : "";
-    migrated.version = 7;
+    migrated.version = 8;
     delete migrated.messages;
     delete migrated.sectionCombos;
     return migrated;
@@ -674,8 +689,10 @@ function renderCardsDrawer() {
   const visibleSections = state.sections.filter((name) => !query || name.includes(query) || visibleCards.some((card) => card.section === name));
   const groupedCards = visibleSections.map((name) => {
     const cards = state.cards.filter((card) => card.section === name);
+    const rules = state.sectionSettings[name] || { random: true, response: true, enabled: true, combo: false };
     const contents = cards.map((card) => card.content).join("\n");
-    return `<details class="card-group" ${query ? "open" : ""}><summary><span><strong>${escapeHtml(name)}</strong><small data-section-count="${escapeHtml(name)}">${cards.length} 张字卡</small></span><b>⌄</b></summary><div class="card-group-editor"><p>一行一张字卡，可直接在下方增删修改。</p><textarea class="section-card-editor" data-card-section="${escapeHtml(name)}" placeholder="在这里输入字卡，一行一张">${escapeHtml(contents)}</textarea><button class="group-save-button" data-save-section="${escapeHtml(name)}">保存这个分区</button></div></details>`;
+    const ruleToggle = (key, label) => `<label class="mini-toggle"><input type="checkbox" data-section-rule="${key}" data-section="${escapeHtml(name)}" ${rules[key] ? "checked" : ""}><i></i><span>${label}</span></label>`;
+    return `<details class="card-group" ${query ? "open" : ""}><summary><span><strong>${escapeHtml(name)}</strong><small data-section-count="${escapeHtml(name)}">${cards.length} 张字卡</small></span><b>⌄</b></summary><div class="card-group-editor"><div class="section-rule-toggles">${ruleToggle("random", "随机")}${ruleToggle("response", "回应")}${ruleToggle("enabled", "启用")}${ruleToggle("combo", "组合")}</div><p>开关统一作用于整个分区。一行一张字卡，可直接在下方增删修改。</p><textarea class="section-card-editor" data-card-section="${escapeHtml(name)}" placeholder="在这里输入字卡，一行一张" spellcheck="false" autocapitalize="off" autocomplete="off">${escapeHtml(contents)}</textarea><button class="group-save-button" data-save-section="${escapeHtml(name)}">保存这个分区</button></div></details>`;
   }).join("");
   $("drawerContent").innerHTML = `
     <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
@@ -683,7 +700,11 @@ function renderCardsDrawer() {
     <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡或分区"><b>${visibleCards.length}/${state.cards.length}</b></div><div class="card-groups">${groupedCards || '<div class="empty-tool">没有符合条件的分区。</div>'}</div></section>`;
   $("addSection").addEventListener("click", () => {
     const name = $("newSection").value.trim();
-    if (name && !state.sections.includes(name)) { state.sections.push(name); saveState(); renderCardsDrawer(); }
+    if (name && !state.sections.includes(name)) {
+      state.sections.push(name);
+      state.sectionSettings[name] = { random: true, response: true, enabled: true, combo: false };
+      saveState(); renderCardsDrawer();
+    }
   });
   $("cardSearch").addEventListener("input", (event) => { cardQuery = event.target.value; renderCardsDrawer(); requestAnimationFrame(() => $("cardSearch")?.focus()); });
   $("checkDuplicates").addEventListener("click", () => {
@@ -695,6 +716,14 @@ function renderCardsDrawer() {
       saveState(); showToast(`已去除 ${repeatedIds.size} 张重复字卡`); renderCardsDrawer();
     });
   });
+  document.querySelectorAll("[data-section-rule]").forEach((input) => input.addEventListener("change", () => {
+    const section = input.dataset.section;
+    const rule = input.dataset.sectionRule;
+    state.sectionSettings[section] ||= { random: true, response: true, enabled: true, combo: false };
+    state.sectionSettings[section][rule] = input.checked;
+    state.cards.filter((card) => card.section === section).forEach((card) => { card[rule] = input.checked; });
+    saveState();
+  }));
   document.querySelectorAll("[data-save-section]").forEach((button) => button.addEventListener("click", async () => {
     const section = button.dataset.saveSection;
     const group = button.closest(".card-group");
@@ -703,14 +732,15 @@ function renderCardsDrawer() {
     const lines = textarea.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const previousCards = structuredClone(state.cards);
     const existing = state.cards.filter((card) => card.section === section);
+    const rules = state.sectionSettings[section] || { random: true, response: true, enabled: true, combo: false };
     const remaining = [...existing];
     const updated = lines.map((content) => {
       let matchIndex = remaining.findIndex((card) => card.content === content);
       if (matchIndex < 0 && remaining.length) matchIndex = 0;
       const previous = matchIndex >= 0 ? remaining.splice(matchIndex, 1)[0] : null;
       return previous
-        ? { ...previous, section, content }
-        : { id: uid(), section, content, triggers: [], random: true, response: true, enabled: true, combo: false };
+        ? { ...previous, ...rules, section, content }
+        : { id: uid(), section, content, triggers: [], ...rules };
     });
     state.cards = state.cards.filter((card) => card.section !== section).concat(updated);
     button.disabled = true; button.textContent = "保存中…";
@@ -729,6 +759,7 @@ function renderCardsDrawer() {
     if (count && !confirm(`分区“${name}”中有 ${count} 张字卡。确定连同这些字卡一起删除吗？`)) return;
     state.cards = state.cards.filter((card) => card.section !== name);
     state.sections = state.sections.filter((section) => section !== name);
+    delete state.sectionSettings[name];
     saveState(); renderCardsDrawer();
   }));
 }
