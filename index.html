@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#2e2e2e" />
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
@@ -27,8 +27,6 @@
       <button class="theme-button" id="themeButton" title="切换深浅模式" aria-label="切换深浅模式"><svg viewBox="0 0 24 24"><path d="M18 15a7 7 0 0 1-9-9 7 7 0 1 0 9 9Z"/></svg></button>
     </aside>
 
-    <button class="mobile-scrim" id="mobileScrim" aria-label="关闭侧边栏"></button>
-
     <aside class="tool-drawer" id="toolDrawer" aria-hidden="true">
       <header><button id="drawerBack" aria-label="返回聊天">‹</button><strong id="drawerTitle"></strong><button id="drawerClose" aria-label="关闭">×</button></header>
       <div class="drawer-content" id="drawerContent"></div>
@@ -36,7 +34,7 @@
 
     <section class="chat-window">
       <header class="chat-topbar">
-        <button class="mobile-menu-button" id="mobileMenu" aria-label="打开侧边栏">☰</button>
+        <button class="mobile-menu-button" id="mobileMenu" aria-label="打开功能菜单"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div class="chat-avatar avatar" id="loverTopAvatar"><span>爱</span></div>
         <div class="chat-person"><strong id="loverName">我的唯一</strong><span id="presence">讯号在线</span></div>
         <div class="mode-picker" aria-label="传讯模式"><button class="active" data-mode="random">随机</button><button data-mode="response">回应</button></div>

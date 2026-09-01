@@ -210,18 +210,32 @@ function openTool(tool) {
   $("toolDrawer").setAttribute("aria-hidden", String(!activeTool));
   closePopovers();
   if (activeTool) renderDrawer(activeTool);
-  closeMobileRail();
 }
 
 function renderDrawer(tool) {
-  const names = { cards: "字卡", stickers: "表情包", memories: "纪念日", background: "聊天背景", appearance: "外观与资料", data: "数据" };
+  const names = { menu: "功能", cards: "字卡", stickers: "表情包", memories: "纪念日", background: "聊天背景", appearance: "外观与资料", data: "数据" };
   $("drawerTitle").textContent = names[tool];
+  if (tool === "menu") renderMenuDrawer();
   if (tool === "cards") renderCardsDrawer();
   if (tool === "stickers") renderStickersDrawer();
   if (tool === "memories") renderMemoriesDrawer();
   if (tool === "background") renderBackgroundDrawer();
   if (tool === "appearance") renderAppearanceDrawer();
   if (tool === "data") renderDataDrawer();
+  $("drawerContent").scrollTop = 0;
+}
+
+function renderMenuDrawer() {
+  const items = [
+    ["cards", "字卡", "录入、分区和调整回复规则", '<path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4"/>'],
+    ["stickers", "表情包", "上传和整理聊天图片", '<circle cx="12" cy="12" r="8"/><path d="M9 10h.01M15 10h.01M9 14c1.6 1.4 4.4 1.4 6 0"/>'],
+    ["memories", "纪念日", "记录相爱的日子", '<path d="M6 5h12v15H6zM8 3v4M16 3v4M6 9h12M9 13h2M13 13h2M9 16h2"/>'],
+    ["background", "聊天背景", "背景、字号和气泡设置", '<path d="M4 5h16v14H4zM7 16l4-4 3 3 2-2 2 3M15 9h.01"/>'],
+    ["appearance", "外观与资料", "头像、称呼和深浅模式", '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>'],
+    ["data", "数据", "备份、恢复和整理本地记录", '<path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5"/>'],
+  ];
+  $("drawerContent").innerHTML = `<section class="mobile-menu-profile"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><div><strong>${escapeHtml(state.myName)}</strong><span>所有内容仅保存在这台设备</span></div></section><nav class="mobile-menu-list">${items.map(([tool, title, description, icon]) => `<button data-menu-tool="${tool}"><svg viewBox="0 0 24 24">${icon}</svg><span><strong>${title}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</nav>`;
+  document.querySelectorAll("[data-menu-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.menuTool)));
 }
 
 function renderCardsDrawer() {
@@ -361,17 +375,17 @@ async function importData(event) {
   } catch { showToast("无法读取这个备份文件"); }
 }
 
-function closeMobileRail() { $("sideRail").classList.remove("mobile-open"); $("mobileScrim").classList.remove("show"); }
-
 document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.tool)));
 document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 $("profileButton").addEventListener("click", () => openTool("appearance"));
 $("chatInfoButton").addEventListener("click", () => openTool("background"));
-$("drawerBack").addEventListener("click", () => openTool("chat"));
+$("drawerBack").addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 760px)").matches && activeTool && activeTool !== "menu") openTool("menu");
+  else openTool("chat");
+});
 $("drawerClose").addEventListener("click", () => openTool("chat"));
 $("themeButton").addEventListener("click", () => { state.theme = state.theme === "light" ? "dark" : "light"; saveState(); applyAppearance(); if (activeTool === "appearance") renderAppearanceDrawer(); });
-$("mobileMenu").addEventListener("click", () => { $("sideRail").classList.add("mobile-open"); $("mobileScrim").classList.add("show"); });
-$("mobileScrim").addEventListener("click", closeMobileRail);
+$("mobileMenu").addEventListener("click", () => openTool("menu"));
 $("draft").addEventListener("input", (event) => { $("sendButton").disabled = !event.target.value.trim(); });
 $("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } });
 $("sendButton").addEventListener("click", sendText);
