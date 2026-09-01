@@ -669,29 +669,18 @@ function duplicateCardGroups() {
 }
 
 function renderCardsDrawer() {
-  const visible = state.cards.filter((card) => card.content.includes(cardQuery) || card.section.includes(cardQuery) || card.triggers.some((word) => word.includes(cardQuery)));
-  const grouped = new Map();
-  visible.forEach((card) => {
-    if (!grouped.has(card.section)) grouped.set(card.section, []);
-    grouped.get(card.section).push(card);
-  });
-  const orderedGroups = [...state.sections, ...[...grouped.keys()].filter((name) => !state.sections.includes(name))]
-    .filter((name) => grouped.has(name));
-  const cardEditor = (card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="combo" ${card.combo ? "checked" : ""}><i></i><span>组合</span></label></div><div class="card-row-buttons"><button class="card-save-button" data-save-card="${card.id}">保存</button><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></div></article>`;
-  const groupedCards = orderedGroups.map((name) => {
-    const cards = grouped.get(name);
-    return `<details class="card-group" ${cardQuery ? "open" : ""}><summary><span><strong>${escapeHtml(name)}</strong><small>${cards.length} 张字卡</small></span><b>⌄</b></summary><div class="card-group-list">${cards.map(cardEditor).join("")}</div></details>`;
+  const query = cardQuery.trim();
+  const visibleCards = state.cards.filter((card) => card.content.includes(query) || card.section.includes(query) || card.triggers.some((word) => word.includes(query)));
+  const visibleSections = state.sections.filter((name) => !query || name.includes(query) || visibleCards.some((card) => card.section === name));
+  const groupedCards = visibleSections.map((name) => {
+    const cards = state.cards.filter((card) => card.section === name);
+    const contents = cards.map((card) => card.content).join("\n");
+    return `<details class="card-group" ${query ? "open" : ""}><summary><span><strong>${escapeHtml(name)}</strong><small data-section-count="${escapeHtml(name)}">${cards.length} 张字卡</small></span><b>⌄</b></summary><div class="card-group-editor"><p>一行一张字卡，可直接在下方增删修改。</p><textarea class="section-card-editor" data-card-section="${escapeHtml(name)}" placeholder="在这里输入字卡，一行一张">${escapeHtml(contents)}</textarea><button class="group-save-button" data-save-section="${escapeHtml(name)}">保存这个分区</button></div></details>`;
   }).join("");
   $("drawerContent").innerHTML = `
-    <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="在这里输入第一张字卡&#10;在这里输入第二张字卡"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
     <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
     <section class="drawer-section duplicate-check"><div class="section-title"><strong>全库重复检查</strong><span>不区分分组</span></div><button class="secondary-button" id="checkDuplicates">检查全部 ${state.cards.length} 张字卡</button><div id="duplicateResults"></div></section>
-    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="card-groups">${groupedCards || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
-  $("addBulkCards").addEventListener("click", () => {
-    const lines = $("bulkCards").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    lines.forEach((content) => state.cards.push({ id: uid(), section: $("bulkSection").value, content, triggers: [], random: true, response: true, enabled: true, combo: false }));
-    if (lines.length) { saveState(); showToast(`已加入 ${lines.length} 张字卡`); renderCardsDrawer(); }
-  });
+    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡或分区"><b>${visibleCards.length}/${state.cards.length}</b></div><div class="card-groups">${groupedCards || '<div class="empty-tool">没有符合条件的分区。</div>'}</div></section>`;
   $("addSection").addEventListener("click", () => {
     const name = $("newSection").value.trim();
     if (name && !state.sections.includes(name)) { state.sections.push(name); saveState(); renderCardsDrawer(); }
@@ -706,33 +695,42 @@ function renderCardsDrawer() {
       saveState(); showToast(`已去除 ${repeatedIds.size} 张重复字卡`); renderCardsDrawer();
     });
   });
-  document.querySelectorAll("[data-card-field]").forEach((input) => input.addEventListener(input.matches("textarea,input:not([type='checkbox'])") ? "input" : "change", (event) => {
-    const card = state.cards.find((item) => item.id === event.target.closest("[data-card]").dataset.card);
-    const field = event.target.dataset.cardField;
-    if (!card) return;
-    if (["random", "response", "enabled", "combo"].includes(field)) card[field] = event.target.checked;
-    else if (field === "triggers") card.triggers = event.target.value.split(/[，,]/).map((word) => word.trim()).filter(Boolean);
-    else card[field] = event.target.value;
-    saveState();
-  }));
-  document.querySelectorAll("[data-save-card]").forEach((button) => button.addEventListener("click", async () => {
+  document.querySelectorAll("[data-save-section]").forEach((button) => button.addEventListener("click", async () => {
+    const section = button.dataset.saveSection;
+    const group = button.closest(".card-group");
+    const textarea = group?.querySelector("[data-card-section]");
+    if (!textarea) return;
+    const lines = textarea.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const previousCards = structuredClone(state.cards);
+    const existing = state.cards.filter((card) => card.section === section);
+    const remaining = [...existing];
+    const updated = lines.map((content) => {
+      let matchIndex = remaining.findIndex((card) => card.content === content);
+      if (matchIndex < 0 && remaining.length) matchIndex = 0;
+      const previous = matchIndex >= 0 ? remaining.splice(matchIndex, 1)[0] : null;
+      return previous
+        ? { ...previous, section, content }
+        : { id: uid(), section, content, triggers: [], random: true, response: true, enabled: true, combo: false };
+    });
+    state.cards = state.cards.filter((card) => card.section !== section).concat(updated);
+    button.disabled = true; button.textContent = "保存中…";
     const saved = await saveStateNow(false);
-    button.textContent = saved ? "已保存" : "重试";
-    button.classList.toggle("saved", saved);
-    if (saved) setTimeout(() => {
-      if (button.isConnected) { button.textContent = "保存"; button.classList.remove("saved"); }
-    }, 1100);
-  }));
-  document.querySelectorAll("[data-delete-card]").forEach((button) => button.addEventListener("click", () => {
-    if (!confirm("确定删除这张字卡吗？")) return;
-    state.cards = state.cards.filter((card) => card.id !== button.dataset.deleteCard); saveState(); renderCardsDrawer();
+    button.disabled = false; button.textContent = saved ? "已保存" : "重新保存"; button.classList.toggle("saved", saved);
+    if (!saved) state.cards = previousCards;
+    else {
+      const count = group.querySelector("[data-section-count]");
+      if (count) count.textContent = `${updated.length} 张字卡`;
+      setTimeout(() => { if (button.isConnected) { button.textContent = "保存这个分区"; button.classList.remove("saved"); } }, 1200);
+    }
   }));
   document.querySelectorAll("[data-delete-section]").forEach((button) => button.addEventListener("click", () => {
     const name = button.dataset.deleteSection;
-    if (state.cards.some((card) => card.section === name)) { showToast("请先把该分区的字卡移到其他分区"); return; }
-    state.sections = state.sections.filter((section) => section !== name); saveState(); renderCardsDrawer();
+    const count = state.cards.filter((card) => card.section === name).length;
+    if (count && !confirm(`分区“${name}”中有 ${count} 张字卡。确定连同这些字卡一起删除吗？`)) return;
+    state.cards = state.cards.filter((card) => card.section !== name);
+    state.sections = state.sections.filter((section) => section !== name);
+    saveState(); renderCardsDrawer();
   }));
-  appendSaveAction($("drawerContent"), "保存字卡设置");
 }
 
 function renderStickersDrawer() {
