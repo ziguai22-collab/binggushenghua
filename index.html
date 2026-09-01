@@ -10,10 +10,10 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles-v30.css" />
+  <link rel="stylesheet" href="./styles-v32.css" />
   <script>
     (() => {
-      const release = "30";
+      const release = "32";
       try {
         if (sessionStorage.getItem("binggushenghua-release") === release) return;
         sessionStorage.setItem("binggushenghua-release", release);
@@ -77,6 +77,7 @@
       <div class="popover sticker-popover" id="stickerPopover" hidden></div>
 
       <footer class="composer">
+        <div class="composer-quote-preview" id="composerQuote" hidden></div>
         <button class="composer-icon" id="stickerButton" title="发送表情包" aria-label="发送表情包"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 10h.01M15 10h.01M9 14c1.6 1.4 4.4 1.4 6 0"/></svg></button>
         <label class="composer-icon image-send" title="发送本地图片" aria-label="发送本地图片"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 16l4-4 3 3 2-2 2 3M15 9h.01"/></svg><input id="imageFile" type="file" accept="image/*"></label>
         <textarea id="draft" rows="1" placeholder="输入消息" aria-label="消息内容"></textarea>
@@ -86,6 +87,6 @@
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app-v30.js" defer></script>
+  <script src="./app-v32.js" defer></script>
 </body>
 </html>
