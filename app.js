@@ -1,7 +1,7 @@
 const KEY = "binggushenghua-v3";
 const oldKey = "binggushenghua-v2";
 const defaults = {
-  version: 3,
+  version: 4,
   theme: "light",
   myName: "我",
   loverName: "我的唯一",
@@ -14,21 +14,23 @@ const defaults = {
   mode: "random",
   replyDelayMin: 2,
   replyDelayMax: 5,
-  sectionCombos: {},
   proactiveEnabled: false,
   proactiveInterval: 30,
   nextProactiveAt: 0,
   introEnabled: true,
   welcomeMessages: ["欢迎回来。讯号已经接通。", "世界很远，而你们始终在同一条讯号里。"],
   anniversary: "2026-01-06",
+  memoryBackgroundImage: "",
+  memoryBackgroundBlur: 0,
+  memoryTextColor: "#403a38",
   memories: [{ id: "memory-1", name: "我们的纪念日", date: "2026-12-31", repeat: true }],
   memoryQuotes: ["相爱不是某一个瞬间，\n是每一个普通日子都被好好记住。"],
   sections: ["日常", "想念", "安慰", "睡前"],
   cards: [
-    { id: "1", section: "日常", content: "等你忙完，我们绕远路一起回家。", triggers: ["下班", "回家", "忙完"], random: true, response: true, enabled: true, combo: false, comboTargets: "" },
-    { id: "2", section: "想念", content: "今天也有好好想你。", triggers: ["想你", "想我"], random: true, response: true, enabled: true, combo: false, comboTargets: "" },
-    { id: "3", section: "安慰", content: "慢慢来，我一直都在。", triggers: ["难过", "累", "不开心", "害怕"], random: true, response: true, enabled: true, combo: false, comboTargets: "" },
-    { id: "4", section: "睡前", content: "晚一点也没关系，困了就来找我。", triggers: ["睡不着", "晚安", "困"], random: true, response: true, enabled: true, combo: false, comboTargets: "" },
+    { id: "1", section: "日常", content: "等你忙完，我们绕远路一起回家。", triggers: ["下班", "回家", "忙完"], random: true, response: true, enabled: true, combo: false },
+    { id: "2", section: "想念", content: "今天也有好好想你。", triggers: ["想你", "想我"], random: true, response: true, enabled: true, combo: false },
+    { id: "3", section: "安慰", content: "慢慢来，我一直都在。", triggers: ["难过", "累", "不开心", "害怕"], random: true, response: true, enabled: true, combo: false },
+    { id: "4", section: "睡前", content: "晚一点也没关系，困了就来找我。", triggers: ["睡不着", "晚安", "困"], random: true, response: true, enabled: true, combo: false },
   ],
   stickers: [],
   messages: [{ id: "welcome", from: "lover", type: "text", content: "线路接通了。你想说什么都可以。", createdAt: new Date().toISOString() }],
@@ -41,21 +43,10 @@ let typing = false;
 let cardQuery = "";
 let toastTimer = null;
 let proactiveTimer = null;
-let replyQuote = null;
-let mediaRecorder = null;
-let voiceStream = null;
-let voiceChunks = [];
-let voiceTranscript = "";
-let voiceStartedAt = 0;
-let voiceTimerHandle = null;
-let speechRecognition = null;
-let voiceCanceled = false;
-let voiceConversationId = null;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const safeImage = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : "";
-const safeAudio = (value) => typeof value === "string" && value.startsWith("data:audio/") ? value : "";
 
 function currentConversation() {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || state.conversations[0];
@@ -77,10 +68,13 @@ function normalizeState(saved = {}) {
       id: card.id || uid(), section: card.section || migrated.sections.find((name) => name === card.sectionId) || card.sectionId || "日常",
       content: card.content || "", triggers: Array.isArray(card.triggers) ? card.triggers : [],
       random: card.random !== false, response: card.response !== false, enabled: card.enabled !== false,
-      combo: card.combo === true, comboTargets: String(card.comboTargets || ""),
+      combo: card.combo === true,
     })) : defaults.cards;
     migrated.memories = Array.isArray(saved.memories) ? saved.memories : defaults.memories;
     migrated.memoryQuotes = Array.isArray(saved.memoryQuotes) && saved.memoryQuotes.some((quote) => String(quote).trim()) ? saved.memoryQuotes.map((quote) => String(quote).trim()).filter(Boolean) : defaults.memoryQuotes;
+    migrated.memoryBackgroundImage = safeImage(saved.memoryBackgroundImage) || "";
+    migrated.memoryBackgroundBlur = Math.min(24, Math.max(0, Number(saved.memoryBackgroundBlur ?? defaults.memoryBackgroundBlur)));
+    migrated.memoryTextColor = /^#[0-9a-f]{6}$/i.test(saved.memoryTextColor || "") ? saved.memoryTextColor : defaults.memoryTextColor;
     migrated.replyDelayMin = Math.min(60, Math.max(1, Number(saved.replyDelayMin ?? defaults.replyDelayMin)));
     migrated.replyDelayMax = Math.min(120, Math.max(migrated.replyDelayMin, Number(saved.replyDelayMax ?? defaults.replyDelayMax)));
     migrated.stickers = Array.isArray(saved.stickers) ? saved.stickers : [];
@@ -90,13 +84,14 @@ function normalizeState(saved = {}) {
       messages: Array.isArray(conversation.messages) ? conversation.messages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) : [],
     })) : [{ id: uid(), title: `与${migrated.loverName}的对话`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messages: legacyMessages.map((message) => ({ id: message.id || uid(), type: "text", ...message })) }];
     migrated.activeConversationId = migrated.conversations.some((conversation) => conversation.id === saved.activeConversationId) ? saved.activeConversationId : migrated.conversations[0].id;
-    migrated.sectionCombos = saved.sectionCombos && typeof saved.sectionCombos === "object" ? saved.sectionCombos : {};
     migrated.proactiveEnabled = saved.proactiveEnabled === true;
     migrated.proactiveInterval = Math.min(120, Math.max(5, Number(saved.proactiveInterval ?? defaults.proactiveInterval)));
     migrated.nextProactiveAt = Number(saved.nextProactiveAt || 0);
     migrated.introEnabled = saved.introEnabled !== false;
     migrated.welcomeMessages = Array.isArray(saved.welcomeMessages) && saved.welcomeMessages.some((item) => String(item).trim()) ? saved.welcomeMessages.map((item) => String(item).trim()).filter(Boolean) : structuredClone(defaults.welcomeMessages);
+    migrated.version = 4;
     delete migrated.messages;
+    delete migrated.sectionCombos;
     return migrated;
 }
 
@@ -261,12 +256,10 @@ function renderMessages(scrollToEnd = true) {
     previousTime = timestamp;
     const quote = message.quote?.content ? `<div class="quoted-message"><span>${escapeHtml(message.quote.from === "me" ? state.myName : state.loverName)}</span><p>${escapeHtml(message.quote.content)}</p></div>` : "";
     const image = ["sticker", "image"].includes(message.type) && safeImage(message.dataUrl);
-    const audio = message.type === "voice" && safeAudio(message.dataUrl);
     const content = image
       ? `${quote}<div class="bubble media-bubble ${message.type === "sticker" ? "sticker-bubble" : "image-bubble"}"><img src="${message.dataUrl}" alt="${escapeHtml(message.content || (message.type === "image" ? "图片" : "表情"))}"></div>`
-      : audio ? `${quote}<div class="bubble voice-bubble"><audio controls preload="metadata" src="${audio}"></audio>${message.transcript ? `<p>${escapeHtml(message.transcript)}</p>` : ""}</div>`
       : `<div class="bubble">${quote}${escapeHtml(message.content)}</div>`;
-    const actions = `<div class="message-actions"><button class="message-quote" data-quote-message="${message.id}" aria-label="引用这条消息">引用</button><button class="message-delete" data-delete-message="${message.id}" aria-label="删除这条消息" title="删除这条消息"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div>`;
+    const actions = `<div class="message-actions"><button class="message-delete" data-delete-message="${message.id}" aria-label="删除这条消息" title="删除这条消息"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div>`;
     return `${divider}<article class="message-row ${mine ? "me" : "lover"}" data-message-row="${message.id}">${mine ? actions : `<div class="message-avatar avatar lover-mark">${avatarMarkup(state.loverAvatar, state.loverName)}</div>`}<div class="message-body">${content}</div>${mine ? `<div class="message-avatar avatar me-mark">${avatarMarkup(state.myAvatar, state.myName)}</div>` : actions}</article>`;
   }).join("");
   document.querySelectorAll("[data-message-row] .bubble").forEach((bubble) => bubble.addEventListener("click", () => {
@@ -281,13 +274,6 @@ function renderMessages(scrollToEnd = true) {
     touchConversation(); saveState();
     renderMessages(false);
   }));
-  document.querySelectorAll("[data-quote-message]").forEach((button) => button.addEventListener("click", () => {
-    const message = currentMessages().find((item) => item.id === button.dataset.quoteMessage);
-    if (!message) return;
-    replyQuote = { id: message.id, from: message.from, content: message.transcript || message.content || "[媒体消息]" };
-    renderQuoteComposer();
-    document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
-  }));
   updateReplyButton();
   if (scrollToEnd) scrollMessagesToEnd();
 }
@@ -299,11 +285,6 @@ function scrollMessagesToEnd() {
     if (typeof list.scrollTo === "function") list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
     else list.scrollTop = list.scrollHeight;
   });
-}
-
-function renderQuoteComposer() {
-  $("quoteComposer").hidden = !replyQuote;
-  if (replyQuote) $("quoteComposerText").textContent = replyQuote.content;
 }
 
 function pendingMessages() {
@@ -352,73 +333,6 @@ async function sendImage(event) {
   event.target.value = "";
 }
 
-function updateVoiceTimer() {
-  const seconds = Math.min(60, Math.floor((Date.now() - voiceStartedAt) / 1000));
-  $("voiceTimer").textContent = `00:${String(seconds).padStart(2, "0")}`;
-  if (seconds >= 60) finishVoiceRecording();
-}
-
-function stopVoiceTracks() {
-  voiceStream?.getTracks().forEach((track) => track.stop());
-  voiceStream = null;
-  clearInterval(voiceTimerHandle);
-  voiceTimerHandle = null;
-  try { speechRecognition?.stop(); } catch {}
-  speechRecognition = null;
-}
-
-async function startVoiceRecording() {
-  if (mediaRecorder?.state === "recording") return;
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { showToast("当前浏览器不支持网页录音"); return; }
-  try {
-    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    voiceChunks = []; voiceTranscript = ""; voiceCanceled = false;
-    voiceConversationId = state.activeConversationId;
-    const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
-    mediaRecorder = new MediaRecorder(voiceStream, preferred ? { mimeType: preferred } : undefined);
-    mediaRecorder.addEventListener("dataavailable", (event) => { if (event.data.size) voiceChunks.push(event.data); });
-    mediaRecorder.addEventListener("stop", async () => {
-      const mime = mediaRecorder.mimeType || voiceChunks[0]?.type || "audio/webm";
-      const blob = new Blob(voiceChunks, { type: mime });
-      stopVoiceTracks(); $("voicePanel").hidden = true; $("voiceButton").classList.remove("recording");
-      if (voiceCanceled || !blob.size) return;
-      if (blob.size > 2.8 * 1024 * 1024) { showToast("语音文件太大，请录制短一些"); return; }
-      const dataUrl = await readAsDataUrl(blob);
-      const conversation = state.conversations.find((item) => item.id === voiceConversationId) || currentConversation();
-      const message = { id: uid(), from: "me", type: "voice", content: "[语音]", transcript: voiceTranscript.trim(), dataUrl, createdAt: new Date().toISOString() };
-      conversation.messages.push(message); conversation.updatedAt = new Date().toISOString();
-      if (!saveState(false)) conversation.messages = conversation.messages.filter((item) => item.id !== message.id);
-      else if (conversation.id === state.activeConversationId) renderMessages();
-    }, { once: true });
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (Recognition) {
-      speechRecognition = new Recognition(); speechRecognition.lang = "zh-CN"; speechRecognition.continuous = true; speechRecognition.interimResults = true;
-      speechRecognition.onresult = (event) => {
-        let finalText = voiceTranscript; let interim = "";
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const text = event.results[index][0].transcript;
-          if (event.results[index].isFinal) finalText += text; else interim += text;
-        }
-        voiceTranscript = finalText; $("voiceTranscript").textContent = (voiceTranscript + interim).trim() || "正在识别你说的话…";
-      };
-      speechRecognition.onerror = () => { $("voiceTranscript").textContent = "暂时无法转写，录音仍会正常发送"; };
-      speechRecognition.start();
-    } else $("voiceTranscript").textContent = "当前浏览器不支持实时转写，录音仍会正常发送";
-    mediaRecorder.start(250); voiceStartedAt = Date.now(); $("voiceTimer").textContent = "00:00"; $("voicePanel").hidden = false; $("voiceButton").classList.add("recording");
-    voiceTimerHandle = setInterval(updateVoiceTimer, 500);
-  } catch { stopVoiceTracks(); showToast("无法使用麦克风，请检查浏览器权限"); }
-}
-
-function finishVoiceRecording() {
-  if (mediaRecorder?.state === "recording") mediaRecorder.stop();
-}
-
-function cancelVoiceRecording() {
-  voiceCanceled = true;
-  if (mediaRecorder?.state === "recording") mediaRecorder.stop();
-  else { stopVoiceTracks(); $("voicePanel").hidden = true; }
-}
-
 function buildReplyItems(combined, conversationMessages = currentMessages(), mode = state.mode) {
   const eligibleCards = state.cards.filter((card) => card.enabled && (mode === "random" ? card.random : card.response));
   const stickerItems = state.stickers.map((sticker) => ({ kind: "sticker", sticker }));
@@ -434,23 +348,31 @@ function buildReplyItems(combined, conversationMessages = currentMessages(), mod
   const picked = pool[Math.floor(Math.random() * pool.length)];
   if (!picked) return [{ kind: "text", content: "这次还没有合适的话。先去字卡里添上一句吧。" }];
   if (picked.kind === "sticker") return [picked];
-  const items = [picked];
   if (picked.card.combo && Math.random() < 0.5) {
-    const targetSections = String(picked.card.comboTargets || "").split(/[，,]/).map((item) => item.trim()).filter(Boolean);
-    const followPool = eligibleCards.filter((card) => card.id !== picked.card.id && card.section !== picked.card.section && (!targetSections.length || targetSections.includes(card.section)));
-    if (followPool.length) items.push({ kind: "card", card: followPool[Math.floor(Math.random() * followPool.length)] });
+    const followPool = eligibleCards.filter((card) => card.id !== picked.card.id && card.section !== picked.card.section);
+    if (followPool.length) {
+      const follow = followPool[Math.floor(Math.random() * followPool.length)];
+      const first = picked.card.content.trim().replace(/[，,。！？!?；;\s]+$/, "");
+      const second = follow.content.trim().replace(/^[，,\s]+/, "");
+      return [{ kind: "text", content: `${first}，${second}` }];
+    }
   }
-  return items;
+  return [picked];
+}
+
+function randomPendingQuote(messages) {
+  if (!messages.length || Math.random() >= 0.5) return undefined;
+  const message = messages[Math.floor(Math.random() * messages.length)];
+  return { from: "me", content: message.content || "[消息]" };
 }
 
 function requestReply() {
   if (typing) return;
   const replyConversation = currentConversation();
   const replyMode = state.mode;
-  const combined = pendingMessages().map((message) => message.content).join("\n");
-  const quoteForReply = replyQuote ? { from: replyQuote.from, content: replyQuote.content } : null;
-  replyQuote = null;
-  renderQuoteComposer();
+  const pending = pendingMessages();
+  const combined = pending.map((message) => message.content).join("\n");
+  const quoteForReply = randomPendingQuote(pending);
   typing = true;
   $("typing").hidden = false;
   $("presence").textContent = "正在输入…";
@@ -530,9 +452,11 @@ function renderConversationsDrawer() {
   ];
   const current = currentConversation();
   const history = state.conversations.filter((conversation) => conversation.id !== current.id).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  const sidebarQuotes = state.memoryQuotes.length ? state.memoryQuotes : defaults.memoryQuotes;
+  const sidebarQuote = sidebarQuotes[Math.floor(Math.random() * sidebarQuotes.length)];
   const dateText = (value) => new Date(value).toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).replaceAll("/", ".");
-  const historyRow = (conversation) => { const last = conversation.messages.at(-1); return `<article class="history-row" data-history-row="${conversation.id}"><button class="history-main" data-conversation="${conversation.id}"><strong>${escapeHtml(conversation.title)}</strong><small>${escapeHtml(last?.transcript || last?.content || "还没有消息")}</small></button><time>${dateText(conversation.updatedAt)}</time><button class="history-edit" data-edit-conversation="${conversation.id}" aria-label="编辑对话名称">✎</button><input class="history-name-input" data-conversation-name="${conversation.id}" value="${escapeHtml(conversation.title)}" hidden></article>`; };
-  $("drawerContent").innerHTML = `<button class="relationship-summary" id="openMemories"><span>TOGETHER</span><strong>你和 ${escapeHtml(state.loverName)} 已经相爱</strong><b>${relationshipDays()} <i>days</i></b></button><section class="current-conversation"><div><span>CURRENT CONVERSATION</span><strong>${escapeHtml(current.title)}</strong><small>${dateText(current.createdAt)}</small></div><button data-edit-conversation="${current.id}" aria-label="编辑当前对话名称">✎</button><input class="history-name-input" data-conversation-name="${current.id}" value="${escapeHtml(current.title)}" hidden><button class="new-conversation" id="newConversation">＋ 新建对话</button></section><details class="history-archive"><summary><span>历史对话</span><b>${history.length}</b></summary><div class="conversation-list">${history.map(historyRow).join("") || '<div class="empty-history">旧对话会被收纳在这里。</div>'}</div></details><div class="drawer-subtitle">工具与设置</div><nav class="mobile-menu-list settings-menu">${items.map(([tool, title, description, icon]) => `<button data-menu-tool="${tool}"><svg viewBox="0 0 24 24">${icon}</svg><span><strong>${title}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</nav>`;
+  const historyRow = (conversation) => { const last = conversation.messages.at(-1); return `<article class="history-row" data-history-row="${conversation.id}"><button class="history-main" data-conversation="${conversation.id}"><strong>${escapeHtml(conversation.title)}</strong><small>${escapeHtml(last?.content || "还没有消息")}</small></button><time>${dateText(conversation.updatedAt)}</time><button class="history-edit" data-edit-conversation="${conversation.id}" aria-label="编辑对话名称">改名</button><input class="history-name-input" data-conversation-name="${conversation.id}" value="${escapeHtml(conversation.title)}" hidden></article>`; };
+  $("drawerContent").innerHTML = `<button class="relationship-summary" id="openMemories"><span>TOGETHER</span><strong>你和 ${escapeHtml(state.loverName)} 已经相爱</strong><b>${relationshipDays()} <i>days</i></b><p>${escapeHtml(sidebarQuote).replace(/\n/g, "<br>")}</p></button><section class="current-conversation"><div><span>CURRENT CONVERSATION</span><strong>${escapeHtml(current.title)}</strong><small>${dateText(current.createdAt)}</small></div><button class="history-edit" data-edit-conversation="${current.id}" aria-label="编辑当前对话名称">改名</button><input class="history-name-input" data-conversation-name="${current.id}" value="${escapeHtml(current.title)}" hidden><button class="new-conversation" id="newConversation">＋ 新建对话</button></section><details class="history-archive"><summary><span>历史对话</span><b>${history.length}</b></summary><div class="conversation-list">${history.map(historyRow).join("") || '<div class="empty-history">旧对话会被收纳在这里。</div>'}</div></details><div class="drawer-subtitle">工具与设置</div><nav class="mobile-menu-list settings-menu">${items.map(([tool, title, description, icon]) => `<button data-menu-tool="${tool}"><svg viewBox="0 0 24 24">${icon}</svg><span><strong>${title}</strong><small>${description}</small></span><b>›</b></button>`).join("")}</nav>`;
   $("openMemories").addEventListener("click", () => openTool("memories"));
   $("newConversation").addEventListener("click", createConversation);
   document.querySelectorAll("[data-conversation]").forEach((button) => button.addEventListener("click", () => {
@@ -566,10 +490,10 @@ function renderCardsDrawer() {
     <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="今天也有好好想你。&#10;慢慢来，我一直都在。"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
     <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
     <section class="drawer-section duplicate-check"><div class="section-title"><strong>全库重复检查</strong><span>不区分分组</span></div><button class="secondary-button" id="checkDuplicates">检查全部 ${state.cards.length} 张字卡</button><div id="duplicateResults"></div></section>
-    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list card-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-combo-row ${card.combo ? "enabled" : ""}"><label class="mini-toggle"><input type="checkbox" data-card-field="combo" ${card.combo ? "checked" : ""}><i></i><span>允许组合</span></label><input data-card-field="comboTargets" value="${escapeHtml(card.comboTargets || "")}" placeholder="接续分区，逗号分隔；留空为任意"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label></div><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
+    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list card-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-combo-row"><label class="mini-toggle"><input type="checkbox" data-card-field="combo" ${card.combo ? "checked" : ""}><i></i><span>允许组合</span></label><small>开启后，可能与其他分区的字卡用逗号连成一句</small></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label></div><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
   $("addBulkCards").addEventListener("click", () => {
     const lines = $("bulkCards").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    lines.forEach((content) => state.cards.push({ id: uid(), section: $("bulkSection").value, content, triggers: [], random: true, response: true, enabled: true, combo: false, comboTargets: "" }));
+    lines.forEach((content) => state.cards.push({ id: uid(), section: $("bulkSection").value, content, triggers: [], random: true, response: true, enabled: true, combo: false }));
     if (lines.length) { saveState(); showToast(`已加入 ${lines.length} 张字卡`); renderCardsDrawer(); }
   });
   $("addSection").addEventListener("click", () => {
@@ -591,7 +515,6 @@ function renderCardsDrawer() {
     else if (field === "triggers") card.triggers = event.target.value.split(/[，,]/).map((word) => word.trim()).filter(Boolean);
     else card[field] = event.target.value;
     saveState();
-    if (field === "combo") renderCardsDrawer();
   }));
   document.querySelectorAll("[data-delete-card]").forEach((button) => button.addEventListener("click", () => {
     if (!confirm("确定删除这张字卡吗？")) return;
@@ -600,7 +523,7 @@ function renderCardsDrawer() {
   document.querySelectorAll("[data-delete-section]").forEach((button) => button.addEventListener("click", () => {
     const name = button.dataset.deleteSection;
     if (state.cards.some((card) => card.section === name)) { showToast("请先把该分区的字卡移到其他分区"); return; }
-    state.sections = state.sections.filter((section) => section !== name); delete state.sectionCombos[name]; saveState(); renderCardsDrawer();
+    state.sections = state.sections.filter((section) => section !== name); saveState(); renderCardsDrawer();
   }));
 }
 
@@ -629,8 +552,26 @@ function renderMemoriesDrawer() {
   const since = state.anniversary ? state.anniversary.replaceAll("-", " · ") : "尚未设定";
   const quotes = state.memoryQuotes.length ? state.memoryQuotes : defaults.memoryQuotes;
   const quote = quotes[Math.floor(Math.random() * quotes.length)];
-  $("drawerContent").innerHTML = `<section class="memory-hero"><span class="memory-kicker">TOGETHER · ${escapeHtml(since)}</span><h3>你和 ${escapeHtml(state.loverName)} 已经相爱</h3><div class="memory-number">${Number.isFinite(days) ? days : "—"}</div><span class="memory-days">days</span><p>${escapeHtml(quote).replace(/\n/g, "<br>")}</p></section><section class="memory-date-setting">${inputField("我们从这一天开始", "date", state.anniversary, "anniversary")}</section><section class="drawer-section memory-quotes"><div class="section-title"><strong>纪念日文案</strong><span>每次进入随机显示</span></div><label class="field-label"><textarea id="newMemoryQuotes" placeholder="写下一句想在纪念日页面看见的话…&#10;可以一行添加一句"></textarea></label><button class="secondary-button memory-add" id="addMemoryQuotes">加入文案库</button><div class="quote-list">${state.memoryQuotes.map((item, index) => `<article><p>${escapeHtml(item)}</p><button data-delete-quote="${index}" aria-label="删除这句文案">×</button></article>`).join("")}</div></section><section class="drawer-section memory-create"><div class="section-title"><strong>新增纪念日</strong><span>时间坐标</span></div><div class="inline-form"><input id="memoryName" placeholder="为这一天取个名字"><input id="memoryDate" type="date"></div><label class="memory-repeat"><input id="memoryRepeat" type="checkbox" checked><i></i><span>每年重复</span></label><button class="green-button memory-add" id="addMemory">保存纪念日</button></section><section class="memory-list"><div class="section-title"><strong>纪念日记录</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => { const countdown = memoryCountdown(memory); return `<article class="memory-row"><div class="memory-date"><b>${escapeHtml(memory.date.slice(5).replace("-", "."))}</b><span>${memory.repeat ? "EVERY YEAR" : memory.date.slice(0, 4)}</span></div><div class="memory-copy"><strong>${escapeHtml(memory.name)}</strong><span>${countdown}</span></div><button data-delete-memory="${memory.id}" aria-label="删除纪念日">×</button></article>`; }).join("") || '<div class="empty-tool">还没有其他纪念日。</div>'}</section>`;
+  const memoryBackground = safeImage(state.memoryBackgroundImage);
+  $("drawerContent").innerHTML = `<section class="memory-hero ${memoryBackground ? "has-wallpaper" : ""}" style="--memory-color:${state.memoryTextColor};--memory-blur:${state.memoryBackgroundBlur}px"><div class="memory-wallpaper" ${memoryBackground ? `style="background-image:url('${memoryBackground}')"` : ""}></div><div class="memory-veil"></div><div class="memory-content"><span class="memory-kicker">TOGETHER · ${escapeHtml(since)}</span><h3>你和 ${escapeHtml(state.loverName)} 已经相爱</h3><div class="memory-number">${Number.isFinite(days) ? days : "—"}</div><span class="memory-days">days</span><p>${escapeHtml(quote).replace(/\n/g, "<br>")}</p></div></section><section class="drawer-section memory-card-settings"><div class="section-title"><strong>纪念日卡片</strong><span>即时预览</span></div><div class="background-actions"><label class="wallpaper-button">更换卡片壁纸<input id="memoryBackgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeMemoryBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>壁纸模糊度</span><b id="memoryBlurValue">${state.memoryBackgroundBlur}px</b></div><input id="memoryBlurRange" type="range" min="0" max="24" step="1" value="${state.memoryBackgroundBlur}"></div><div class="memory-color-setting"><span>文字色号</span><input id="memoryColorPicker" type="color" value="${state.memoryTextColor}" aria-label="选择纪念日文字颜色"><input id="memoryColorHex" value="${state.memoryTextColor}" maxlength="7" aria-label="纪念日文字色号"></div></section><section class="memory-date-setting">${inputField("我们从这一天开始", "date", state.anniversary, "anniversary")}</section><section class="drawer-section memory-quotes"><div class="section-title"><strong>纪念日文案</strong><span>侧边栏与卡片随机显示</span></div><label class="field-label"><textarea id="newMemoryQuotes" placeholder="写下一句想看见的话…&#10;可以一行添加一句"></textarea></label><button class="secondary-button memory-add" id="addMemoryQuotes">加入文案库</button><div class="quote-list">${state.memoryQuotes.map((item, index) => `<article><p>${escapeHtml(item)}</p><button data-delete-quote="${index}" aria-label="删除这句文案">×</button></article>`).join("")}</div></section><section class="drawer-section memory-create"><div class="section-title"><strong>新增纪念日</strong><span>时间坐标</span></div><div class="inline-form"><input id="memoryName" placeholder="为这一天取个名字"><input id="memoryDate" type="date"></div><label class="memory-repeat"><input id="memoryRepeat" type="checkbox" checked><i></i><span>每年重复</span></label><button class="green-button memory-add" id="addMemory">保存纪念日</button></section><section class="memory-list"><div class="section-title"><strong>纪念日记录</strong><span>${state.memories.length} 个</span></div>${state.memories.map((memory) => { const countdown = memoryCountdown(memory); return `<article class="memory-row"><div class="memory-date"><b>${escapeHtml(memory.date.slice(5).replace("-", "."))}</b><span>${memory.repeat ? "EVERY YEAR" : memory.date.slice(0, 4)}</span></div><div class="memory-copy"><strong>${escapeHtml(memory.name)}</strong><span>${countdown}</span></div><button data-delete-memory="${memory.id}" aria-label="删除纪念日">×</button></article>`; }).join("") || '<div class="empty-tool">还没有其他纪念日。</div>'}</section>`;
   bindSettingInputs();
+  $("memoryBackgroundFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    state.memoryBackgroundImage = await compressImage(file, 1600, 0.84);
+    if (saveState(false)) { renderMemoriesDrawer(); showToast("纪念日卡片壁纸已替换"); }
+  });
+  $("removeMemoryBackground").addEventListener("click", () => { state.memoryBackgroundImage = ""; saveState(); renderMemoriesDrawer(); showToast("已恢复默认卡片背景"); });
+  $("memoryBlurRange").addEventListener("input", (event) => {
+    state.memoryBackgroundBlur = Number(event.target.value); $("memoryBlurValue").textContent = `${state.memoryBackgroundBlur}px`;
+    document.querySelector(".memory-hero")?.style.setProperty("--memory-blur", `${state.memoryBackgroundBlur}px`); saveState();
+  });
+  const setMemoryColor = (value) => {
+    if (!/^#[0-9a-f]{6}$/i.test(value)) return false;
+    state.memoryTextColor = value; $("memoryColorPicker").value = value; $("memoryColorHex").value = value;
+    document.querySelector(".memory-hero")?.style.setProperty("--memory-color", value); saveState(); return true;
+  };
+  $("memoryColorPicker").addEventListener("input", (event) => setMemoryColor(event.target.value));
+  $("memoryColorHex").addEventListener("change", (event) => { if (!setMemoryColor(event.target.value.trim())) { event.target.value = state.memoryTextColor; showToast("请输入六位十六进制色号，例如 #403a38"); } });
   $("addMemoryQuotes").addEventListener("click", () => {
     const additions = $("newMemoryQuotes").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
     if (!additions.length) { showToast("先写下一句文案吧"); return; }
@@ -754,7 +695,7 @@ async function importData(event) {
   try {
     const incoming = JSON.parse(await file.text());
     if (!Array.isArray(incoming.cards) || (!Array.isArray(incoming.messages) && !Array.isArray(incoming.conversations))) throw new Error("invalid");
-    state = normalizeState({ ...incoming, version: 3 });
+    state = normalizeState({ ...incoming, version: 4 });
     if (saveState(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("备份已恢复"); }
   } catch { showToast("无法读取这个备份文件"); }
 }
@@ -777,10 +718,6 @@ $("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" &&
 $("replyButton").addEventListener("click", requestReply);
 $("stickerButton").addEventListener("click", toggleStickerPopover);
 $("imageFile").addEventListener("change", sendImage);
-$("voiceButton").addEventListener("click", startVoiceRecording);
-$("finishVoice").addEventListener("click", finishVoiceRecording);
-$("cancelVoice").addEventListener("click", cancelVoiceRecording);
-$("cancelQuote").addEventListener("click", () => { replyQuote = null; renderQuoteComposer(); });
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".popover,.composer")) closePopovers();
   if (!event.target.closest("[data-message-row]")) document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
@@ -795,7 +732,6 @@ window.addEventListener("resize", () => {
 applyAppearance();
 setMode(state.mode);
 renderMessages();
-renderQuoteComposer();
 saveState();
 scheduleProactive();
 runOpeningAnimation();

@@ -8,7 +8,7 @@
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./styles.css?v=11" />
+  <link rel="stylesheet" href="./styles.css?v=12" />
 </head>
 <body>
   <div class="opening-screen" id="openingScreen" aria-label="正在进入我们的空间">
@@ -60,16 +60,13 @@
       <footer class="composer">
         <button class="composer-icon" id="stickerButton" title="发送表情包" aria-label="发送表情包"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 10h.01M15 10h.01M9 14c1.6 1.4 4.4 1.4 6 0"/></svg></button>
         <label class="composer-icon image-send" title="发送本地图片" aria-label="发送本地图片"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 16l4-4 3 3 2-2 2 3M15 9h.01"/></svg><input id="imageFile" type="file" accept="image/*"></label>
-        <button class="composer-icon voice-button" id="voiceButton" title="录制语音" aria-label="录制语音"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/></svg></button>
         <textarea id="draft" rows="1" placeholder="输入消息" aria-label="消息内容"></textarea>
         <button id="replyButton" class="reply-trigger" title="点击后让他回复" aria-label="点击后让他回复"><svg viewBox="0 0 24 24"><path d="M5 6h14v10H9l-4 3V6Z"/><path d="m16 2 .7 1.8 1.8.7-1.8.7L16 7l-.7-1.8-1.8-.7 1.8-.7L16 2Z"/></svg></button>
         <span id="modeLabel" class="visually-hidden">随机传讯</span>
-        <div class="quote-composer" id="quoteComposer" hidden><span><b>下一次回复将引用</b><small id="quoteComposerText"></small></span><button id="cancelQuote" aria-label="取消引用">×</button></div>
       </footer>
-      <div class="voice-panel" id="voicePanel" hidden><div class="voice-pulse"><i></i><i></i><i></i></div><div><strong id="voiceStatus">正在录音</strong><span id="voiceTimer">00:00</span><p id="voiceTranscript">正在识别你说的话…</p></div><button id="cancelVoice">取消</button><button id="finishVoice">发送</button></div>
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app.js?v=11" defer></script>
+  <script src="./app.js?v=12" defer></script>
 </body>
 </html>
