@@ -7,7 +7,7 @@ const defaults = {
   version: 7,
   theme: "light",
   myName: "我",
-  loverName: "我的唯一",
+  loverName: "对方",
   myAvatar: "",
   loverAvatar: "",
   backgroundImage: "",
@@ -30,26 +30,21 @@ const defaults = {
   replyQuoteProbability: 50,
   replyMaxCount: 3,
   introEnabled: true,
-  welcomeMessages: ["欢迎回来。讯号已经接通。", "世界很远，而你们始终在同一条讯号里。"],
+  welcomeMessages: ["欢迎回来。", "新的对话已经准备好。"],
   welcomeShuffle: [],
   lastWelcomeMessage: "",
   lastSavedAt: "",
   lastBackupAt: "",
-  anniversary: "2026-01-06",
+  anniversary: "",
   memoryBackgroundImage: "",
   memoryBackgroundBlur: 0,
   memoryTextColor: "#403a38",
-  memories: [{ id: "memory-1", name: "我们的纪念日", date: "2026-12-31", repeat: true }],
-  memoryQuotes: ["相爱不是某一个瞬间，\n是每一个普通日子都被好好记住。"],
+  memories: [],
+  memoryQuotes: ["在这里添加你想随机显示的纪念日文案。"],
   sections: ["日常", "想念", "安慰", "睡前"],
-  cards: [
-    { id: "1", section: "日常", content: "等你忙完，我们绕远路一起回家。", triggers: ["下班", "回家", "忙完"], random: true, response: true, enabled: true, combo: false },
-    { id: "2", section: "想念", content: "今天也有好好想你。", triggers: ["想你", "想我"], random: true, response: true, enabled: true, combo: false },
-    { id: "3", section: "安慰", content: "慢慢来，我一直都在。", triggers: ["难过", "累", "不开心", "害怕"], random: true, response: true, enabled: true, combo: false },
-    { id: "4", section: "睡前", content: "晚一点也没关系，困了就来找我。", triggers: ["睡不着", "晚安", "困"], random: true, response: true, enabled: true, combo: false },
-  ],
+  cards: [],
   stickers: [],
-  messages: [{ id: "welcome", from: "lover", type: "text", content: "线路接通了。你想说什么都可以。", createdAt: new Date().toISOString() }],
+  messages: [],
 };
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -521,7 +516,7 @@ function buildReplyItems(combined, conversationMessages = currentMessages(), mod
         if (followIndex >= 0) available.splice(followIndex, 1);
         const first = picked.card.content.trim().replace(/[，,。！？!?；;\s]+$/, "");
         const second = follow.content.trim().replace(/^[，,\s]+/, "");
-        replies.push({ kind: "text", content: `${first}，${second}` });
+        replies.push({ kind: "text", content: `${first} ${second}` });
         continue;
       }
     }
@@ -675,11 +670,23 @@ function duplicateCardGroups() {
 
 function renderCardsDrawer() {
   const visible = state.cards.filter((card) => card.content.includes(cardQuery) || card.section.includes(cardQuery) || card.triggers.some((word) => word.includes(cardQuery)));
+  const grouped = new Map();
+  visible.forEach((card) => {
+    if (!grouped.has(card.section)) grouped.set(card.section, []);
+    grouped.get(card.section).push(card);
+  });
+  const orderedGroups = [...state.sections, ...[...grouped.keys()].filter((name) => !state.sections.includes(name))]
+    .filter((name) => grouped.has(name));
+  const cardEditor = (card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="combo" ${card.combo ? "checked" : ""}><i></i><span>组合</span></label></div><div class="card-row-buttons"><button class="card-save-button" data-save-card="${card.id}">保存</button><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></div></article>`;
+  const groupedCards = orderedGroups.map((name) => {
+    const cards = grouped.get(name);
+    return `<details class="card-group" ${cardQuery ? "open" : ""}><summary><span><strong>${escapeHtml(name)}</strong><small>${cards.length} 张字卡</small></span><b>⌄</b></summary><div class="card-group-list">${cards.map(cardEditor).join("")}</div></details>`;
+  }).join("");
   $("drawerContent").innerHTML = `
-    <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="今天也有好好想你。&#10;慢慢来，我一直都在。"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
+    <section class="drawer-section"><div class="section-title"><strong>批量录入</strong><span>一行一张字卡</span></div><label class="field-label"><textarea id="bulkCards" placeholder="在这里输入第一张字卡&#10;在这里输入第二张字卡"></textarea></label><div class="inline-form"><select id="bulkSection">${state.sections.map((name) => `<option>${escapeHtml(name)}</option>`).join("")}</select><button class="green-button" id="addBulkCards">加入字卡</button></div></section>
     <section class="drawer-section"><div class="section-title"><strong>分区</strong><span>${state.sections.length} 个</span></div><div class="inline-form"><input id="newSection" placeholder="新分区名称"><button class="secondary-button" id="addSection">添加</button></div><div class="section-tags">${state.sections.map((name) => `<span class="section-chip">${escapeHtml(name)}${state.sections.length > 1 ? `<button data-delete-section="${escapeHtml(name)}">×</button>` : ""}</span>`).join("")}</div></section>
     <section class="drawer-section duplicate-check"><div class="section-title"><strong>全库重复检查</strong><span>不区分分组</span></div><button class="secondary-button" id="checkDuplicates">检查全部 ${state.cards.length} 张字卡</button><div id="duplicateResults"></div></section>
-    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="simple-list card-list">${visible.map((card) => `<article class="card-edit" data-card="${card.id}"><textarea class="card-copy" data-card-field="content">${escapeHtml(card.content)}</textarea><div class="card-meta-row"><select data-card-field="section">${state.sections.map((name) => `<option ${name === card.section ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><input data-card-field="triggers" value="${escapeHtml(card.triggers.join("，"))}" placeholder="触发词，用逗号分隔"></div><div class="card-edit-actions"><div class="check-group"><label class="mini-toggle"><input type="checkbox" data-card-field="random" ${card.random ? "checked" : ""}><i></i><span>随机</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="response" ${card.response ? "checked" : ""}><i></i><span>回应</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="enabled" ${card.enabled ? "checked" : ""}><i></i><span>启用</span></label><label class="mini-toggle"><input type="checkbox" data-card-field="combo" ${card.combo ? "checked" : ""}><i></i><span>组合</span></label></div><button class="icon-danger" data-delete-card="${card.id}" aria-label="删除字卡"><svg viewBox="0 0 24 24"><path d="M7 7h10l-.7 12H7.7L7 7ZM9 7V4h6v3M5 7h14"/></svg></button></div></article>`).join("") || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
+    <section><div class="drawer-search"><input id="cardSearch" value="${escapeHtml(cardQuery)}" placeholder="搜索字卡、分区或触发词"><b>${visible.length}/${state.cards.length}</b></div><div class="card-groups">${groupedCards || '<div class="empty-tool">没有符合条件的字卡。</div>'}</div></section>`;
   $("addBulkCards").addEventListener("click", () => {
     const lines = $("bulkCards").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     lines.forEach((content) => state.cards.push({ id: uid(), section: $("bulkSection").value, content, triggers: [], random: true, response: true, enabled: true, combo: false }));
@@ -707,6 +714,14 @@ function renderCardsDrawer() {
     else if (field === "triggers") card.triggers = event.target.value.split(/[，,]/).map((word) => word.trim()).filter(Boolean);
     else card[field] = event.target.value;
     saveState();
+  }));
+  document.querySelectorAll("[data-save-card]").forEach((button) => button.addEventListener("click", async () => {
+    const saved = await saveStateNow(false);
+    button.textContent = saved ? "已保存" : "重试";
+    button.classList.toggle("saved", saved);
+    if (saved) setTimeout(() => {
+      if (button.isConnected) { button.textContent = "保存"; button.classList.remove("saved"); }
+    }, 1100);
   }));
   document.querySelectorAll("[data-delete-card]").forEach((button) => button.addEventListener("click", () => {
     if (!confirm("确定删除这张字卡吗？")) return;
@@ -818,7 +833,7 @@ function renderAppearanceDrawer() {
     <section class="drawer-section intro-settings"><div class="section-title"><strong>开屏与欢迎语</strong><span>Canvas 蝴蝶动画</span></div><label class="option-toggle intro-toggle"><span><b>显示开屏动画</b><small>每次重新进入时播放</small></span><input id="introEnabled" type="checkbox" ${state.introEnabled ? "checked" : ""}><i></i></label><label class="field-label"><span>随机欢迎语，一行一句</span><textarea id="welcomeMessagesText" placeholder="欢迎回来。讯号已经接通。">${escapeHtml(state.welcomeMessages.join("\n"))}</textarea></label><button class="secondary-button memory-add" id="saveWelcomeMessages">保存欢迎语</button></section>
     <section class="drawer-section reply-delay-settings"><div class="section-title"><strong>回复等待时间</strong><span>区间内随机</span></div><p class="drawer-intro">点击手动回复后，等待时间会在最短与最长之间随机选择。</p><div class="range-field"><div class="range-head"><span>最短等待</span><b id="delayMinValue">${formatDelay(state.replyDelayMin)}</b></div><input id="delayMinRange" type="range" min="1" max="60" step="1" value="${state.replyDelayMin}"></div><div class="range-field"><div class="range-head"><span>最长等待</span><b id="delayMaxValue">${formatDelay(state.replyDelayMax)}</b></div><input id="delayMaxRange" type="range" min="1" max="120" step="1" value="${state.replyDelayMax}"></div><div class="delay-scale"><span>1 秒</span><span>1 分钟</span><span>2 分钟</span></div></section>
     <section class="drawer-section"><div class="section-title"><strong>显示模式</strong></div><div class="theme-choice"><button data-theme-choice="light" class="${state.theme === "light" ? "active" : ""}">浅色</button><button data-theme-choice="dark" class="${state.theme === "dark" ? "active" : ""}">深色</button></div></section>`;
-  document.querySelector(".background-settings .background-actions").insertAdjacentHTML("afterend", `<div class="bubble-live-preview"><div class="bubble-preview-row lover"><i>${escapeHtml((state.loverName || "他").slice(0, 1))}</i><span>我在这里，慢慢说。</span></div><div class="bubble-preview-row me"><span>今天也很想你。</span><i>${escapeHtml((state.myName || "我").slice(0, 1))}</i></div></div>`);
+  document.querySelector(".background-settings .background-actions").insertAdjacentHTML("afterend", `<div class="bubble-live-preview"><div class="bubble-preview-row lover"><i>${escapeHtml((state.loverName || "对").slice(0, 1))}</i><span>对方消息预览</span></div><div class="bubble-preview-row me"><span>我的消息预览</span><i>${escapeHtml((state.myName || "我").slice(0, 1))}</i></div></div>`);
   bindSettingInputs();
   document.querySelectorAll("[data-avatar]").forEach((input) => input.addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;

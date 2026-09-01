@@ -7,10 +7,10 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles.css?v=19" />
+  <link rel="stylesheet" href="./styles.css?v=20" />
 </head>
 <body>
-  <div class="opening-screen" id="openingScreen" aria-label="正在进入我们的空间">
+  <div class="opening-screen" id="openingScreen" aria-label="正在进入页面">
     <canvas id="openingCanvas" aria-hidden="true"></canvas>
     <div class="opening-copy"><span>OUR PRIVATE SIGNAL</span><p id="openingWelcome"></p><i></i></div>
     <button id="skipOpening" aria-label="跳过开屏动画">跳过</button>
@@ -30,6 +30,8 @@
     </aside>
 
     <aside class="tool-drawer" id="toolDrawer" aria-hidden="true">
+      <div class="sidebar-wallpaper-layer" aria-hidden="true"></div>
+      <div class="sidebar-wallpaper-veil" aria-hidden="true"></div>
       <header><button id="drawerBack" aria-label="返回聊天">‹</button><strong id="drawerTitle"></strong><button id="drawerClose" aria-label="关闭">×</button></header>
       <div class="drawer-content" id="drawerContent"></div>
     </aside>
@@ -37,6 +39,8 @@
 
     <button class="drawer-scrim" id="optionsScrim" aria-label="关闭聊天设置" hidden></button>
     <aside class="chat-options" id="chatOptions" aria-hidden="true">
+      <div class="sidebar-wallpaper-layer" aria-hidden="true"></div>
+      <div class="sidebar-wallpaper-veil" aria-hidden="true"></div>
       <header><strong>聊天设置</strong><button id="optionsClose" aria-label="关闭聊天设置">×</button></header>
       <div class="chat-options-content" id="chatOptionsContent"></div>
     </aside>
@@ -44,7 +48,7 @@
     <section class="chat-window">
       <header class="chat-topbar">
         <button class="mobile-menu-button" id="mobileMenu" aria-label="打开功能菜单"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-        <div class="chat-person"><strong id="loverName">我的唯一</strong><span id="presence" hidden>讯号在线</span></div>
+        <div class="chat-person"><strong id="loverName">对方</strong><span id="presence" hidden>讯号在线</span></div>
         <button class="more-button" id="chatInfoButton" aria-label="聊天设置"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></svg></button>
       </header>
 
@@ -66,6 +70,6 @@
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app.js?v=19" defer></script>
+  <script src="./app.js?v=20" defer></script>
 </body>
 </html>
