@@ -4,7 +4,7 @@ const DB_NAME = "binggushenghua-local";
 const DB_STORE = "app-state";
 const DB_KEY = "current";
 const defaults = {
-  version: 5,
+  version: 6,
   theme: "light",
   myName: "我",
   loverName: "我的唯一",
@@ -12,8 +12,14 @@ const defaults = {
   loverAvatar: "",
   backgroundImage: "",
   backgroundOverlay: 0,
+  sidebarBackgroundImage: "",
+  sidebarBackgroundBlur: 0,
   fontSize: 14,
   bubbleRadius: 4,
+  myBubbleColor: "",
+  myBubbleTextColor: "",
+  loverBubbleColor: "",
+  loverBubbleTextColor: "",
   mode: "random",
   replyDelayMin: 2,
   replyDelayMax: 5,
@@ -61,6 +67,7 @@ let saveRevision = 0;
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const safeImage = (value) => typeof value === "string" && value.startsWith("data:image/") ? value : "";
+const safeColor = (value) => /^#[0-9a-f]{6}$/i.test(value || "") ? value.toLowerCase() : "";
 
 function currentConversation() {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || state.conversations[0];
@@ -89,6 +96,9 @@ function normalizeState(saved = {}) {
     migrated.memoryBackgroundImage = typeof saved.memoryBackgroundImage === "string" && saved.memoryBackgroundImage.startsWith("data:image/") ? saved.memoryBackgroundImage : "";
     migrated.memoryBackgroundBlur = Math.min(24, Math.max(0, Number(saved.memoryBackgroundBlur ?? defaults.memoryBackgroundBlur)));
     migrated.memoryTextColor = /^#[0-9a-f]{6}$/i.test(saved.memoryTextColor || "") ? saved.memoryTextColor : defaults.memoryTextColor;
+    migrated.sidebarBackgroundImage = safeImage(saved.sidebarBackgroundImage);
+    migrated.sidebarBackgroundBlur = Math.min(24, Math.max(0, Number(saved.sidebarBackgroundBlur ?? defaults.sidebarBackgroundBlur)));
+    ["myBubbleColor", "myBubbleTextColor", "loverBubbleColor", "loverBubbleTextColor"].forEach((key) => { migrated[key] = safeColor(saved[key]); });
     migrated.replyDelayMin = Math.min(60, Math.max(1, Number(saved.replyDelayMin ?? defaults.replyDelayMin)));
     migrated.replyDelayMax = Math.min(120, Math.max(migrated.replyDelayMin, Number(saved.replyDelayMax ?? defaults.replyDelayMax)));
     migrated.replyQuoteEnabled = saved.replyQuoteEnabled !== false;
@@ -109,7 +119,7 @@ function normalizeState(saved = {}) {
     migrated.lastWelcomeMessage = typeof saved.lastWelcomeMessage === "string" ? saved.lastWelcomeMessage : "";
     migrated.lastSavedAt = typeof saved.lastSavedAt === "string" ? saved.lastSavedAt : "";
     migrated.lastBackupAt = typeof saved.lastBackupAt === "string" ? saved.lastBackupAt : "";
-    migrated.version = 5;
+    migrated.version = 6;
     delete migrated.messages;
     delete migrated.sectionCombos;
     return migrated;
@@ -174,7 +184,7 @@ function setSaveStatus(status, label) {
 
 async function persistState(quiet = true) {
   const savedAt = new Date().toISOString();
-  const snapshot = structuredClone({ ...state, version: 5, lastSavedAt: savedAt });
+  const snapshot = structuredClone({ ...state, version: 6, lastSavedAt: savedAt });
   const task = async () => {
     try {
       if (storageMode === "indexedDB") await writeDatabaseState(snapshot);
@@ -286,12 +296,29 @@ function relationshipDays() {
   return Number.isFinite(start) ? Math.max(1, Math.floor((Date.now() - start) / 86400000) + 1) : 1;
 }
 
+function defaultBubbleColors() {
+  return state.theme === "dark"
+    ? { myBubbleColor: "#3c7550", myBubbleTextColor: "#ffffff", loverBubbleColor: "#2c2c2c", loverBubbleTextColor: "#ededed" }
+    : { myBubbleColor: "#95ec69", myBubbleTextColor: "#111111", loverBubbleColor: "#ffffff", loverBubbleTextColor: "#191919" };
+}
+
+function shownBubbleColor(key) {
+  return safeColor(state[key]) || defaultBubbleColors()[key];
+}
+
 function applyAppearance() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.style.setProperty("--chat-font-size", `${state.fontSize}px`);
   document.documentElement.style.setProperty("--bubble-radius", `${state.bubbleRadius}px`);
   document.documentElement.style.setProperty("--bg-overlay", String(state.backgroundOverlay / 100));
+  document.documentElement.style.setProperty("--mine", shownBubbleColor("myBubbleColor"));
+  document.documentElement.style.setProperty("--mine-ink", shownBubbleColor("myBubbleTextColor"));
+  document.documentElement.style.setProperty("--friend", shownBubbleColor("loverBubbleColor"));
+  document.documentElement.style.setProperty("--friend-ink", shownBubbleColor("loverBubbleTextColor"));
+  document.documentElement.style.setProperty("--sidebar-blur", `${state.sidebarBackgroundBlur}px`);
+  document.documentElement.style.setProperty("--sidebar-wallpaper", safeImage(state.sidebarBackgroundImage) ? `url("${state.sidebarBackgroundImage}")` : "none");
   $("messageList").style.backgroundImage = safeImage(state.backgroundImage) ? `url("${state.backgroundImage}")` : "";
+  [$("toolDrawer"), $("chatOptions")].forEach((drawer) => drawer.classList.toggle("has-sidebar-wallpaper", Boolean(safeImage(state.sidebarBackgroundImage))));
   $("themeButton").innerHTML = state.theme === "light" ? '<svg viewBox="0 0 24 24"><path d="M18 15a7 7 0 0 1-9-9 7 7 0 1 0 9 9Z"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>';
   $("profileButton").innerHTML = `<span><b>${relationshipDays()}</b><small>DAYS</small></span>`;
   $("profileButton").title = `你和${state.loverName}已经相爱 ${relationshipDays()} 天`;
@@ -545,7 +572,7 @@ function openTool(tool) {
 }
 
 function renderDrawer(tool) {
-  const names = { conversations: "对话", cards: "字卡", stickers: "表情包", memories: "纪念日", appearance: "设置", data: "数据" };
+  const names = { conversations: "", cards: "字卡", stickers: "表情包", memories: "纪念日", appearance: "设置", data: "数据" };
   $("drawerTitle").textContent = names[tool];
   if (tool === "conversations") renderConversationsDrawer();
   if (tool === "cards") renderCardsDrawer();
@@ -731,8 +758,19 @@ function formatDelay(seconds) {
   return value < 60 ? `${value} 秒` : value === 60 ? "1 分钟" : `${Math.floor(value / 60)} 分 ${String(value % 60).padStart(2, "0")} 秒`;
 }
 
+function colorSettingHtml(label, key) {
+  const value = shownBubbleColor(key);
+  return `<label class="color-setting"><span>${label}</span><input type="color" value="${value}" data-color-picker="${key}" aria-label="${label}"><input value="${value}" maxlength="7" data-color-hex="${key}" aria-label="${label}色号"></label>`;
+}
+
 function renderAppearanceDrawer() {
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="section-title"><strong>双方资料</strong><span>仅保存在本机</span></div>${inputField("我的称呼", "text", state.myName, "myName")}${inputField("爱人的称呼", "text", state.loverName, "loverName")}<div class="avatar-settings"><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><span>替换我的头像</span><input type="file" accept="image/*" data-avatar="myAvatar"></label><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.loverAvatar, state.loverName)}</div><span>替换爱人头像</span><input type="file" accept="image/*" data-avatar="loverAvatar"></label></div></section><section class="drawer-section background-settings"><div class="section-title"><strong>聊天背景</strong><span>消息区域</span></div><div class="background-preview" style="background-image:${safeImage(state.backgroundImage) ? `url('${state.backgroundImage}')` : "none"}"></div><div class="background-actions"><label class="wallpaper-button">更换壁纸<input id="backgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>聊天字体大小</span><b id="fontSizeValue">${state.fontSize}px</b></div><input id="fontSizeRange" type="range" min="12" max="22" value="${state.fontSize}"></div><div class="range-field"><div class="range-head"><span>气泡圆角</span><b id="radiusValue">${state.bubbleRadius}px</b></div><input id="radiusRange" type="range" min="0" max="18" value="${state.bubbleRadius}"></div><div class="range-field"><div class="range-head"><span>背景遮罩</span><b id="overlayValue">${state.backgroundOverlay}%</b></div><input id="overlayRange" type="range" min="0" max="75" value="${state.backgroundOverlay}"></div></section><section class="drawer-section intro-settings"><div class="section-title"><strong>开屏与欢迎语</strong><span>Canvas 蝴蝶动画</span></div><label class="option-toggle intro-toggle"><span><b>显示开屏动画</b><small>每次重新进入时播放</small></span><input id="introEnabled" type="checkbox" ${state.introEnabled ? "checked" : ""}><i></i></label><label class="field-label"><span>随机欢迎语，一行一句</span><textarea id="welcomeMessagesText" placeholder="欢迎回来。讯号已经接通。">${escapeHtml(state.welcomeMessages.join("\n"))}</textarea></label><button class="secondary-button memory-add" id="saveWelcomeMessages">保存欢迎语</button></section><section class="drawer-section reply-delay-settings"><div class="section-title"><strong>回复等待时间</strong><span>区间内随机</span></div><p class="drawer-intro">点击手动回复后，等待时间会在最短与最长之间随机选择。</p><div class="range-field"><div class="range-head"><span>最短等待</span><b id="delayMinValue">${formatDelay(state.replyDelayMin)}</b></div><input id="delayMinRange" type="range" min="1" max="60" step="1" value="${state.replyDelayMin}"></div><div class="range-field"><div class="range-head"><span>最长等待</span><b id="delayMaxValue">${formatDelay(state.replyDelayMax)}</b></div><input id="delayMaxRange" type="range" min="1" max="120" step="1" value="${state.replyDelayMax}"></div><div class="delay-scale"><span>1 秒</span><span>1 分钟</span><span>2 分钟</span></div></section><section class="drawer-section"><div class="section-title"><strong>显示模式</strong></div><div class="theme-choice"><button data-theme-choice="light" class="${state.theme === "light" ? "active" : ""}">浅色</button><button data-theme-choice="dark" class="${state.theme === "dark" ? "active" : ""}">深色</button></div></section>`;
+  $("drawerContent").innerHTML = `
+    <section class="drawer-section"><div class="section-title"><strong>双方资料</strong><span>仅保存在本机</span></div>${inputField("我的称呼", "text", state.myName, "myName")}${inputField("爱人的称呼", "text", state.loverName, "loverName")}<div class="avatar-settings"><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.myAvatar, state.myName)}</div><span>替换我的头像</span><input type="file" accept="image/*" data-avatar="myAvatar"></label><label class="avatar-upload"><div class="avatar">${avatarMarkup(state.loverAvatar, state.loverName)}</div><span>替换爱人头像</span><input type="file" accept="image/*" data-avatar="loverAvatar"></label></div></section>
+    <section class="drawer-section background-settings"><div class="section-title"><strong>聊天外观</strong><span>消息区域</span></div><div class="background-preview" style="background-image:${safeImage(state.backgroundImage) ? `url('${state.backgroundImage}')` : "none"}"></div><div class="background-actions"><label class="wallpaper-button">更换聊天壁纸<input id="backgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>聊天字体大小</span><b id="fontSizeValue">${state.fontSize}px</b></div><input id="fontSizeRange" type="range" min="12" max="22" value="${state.fontSize}"></div><div class="range-field"><div class="range-head"><span>气泡圆角</span><b id="radiusValue">${state.bubbleRadius}px</b></div><input id="radiusRange" type="range" min="0" max="18" value="${state.bubbleRadius}"></div><div class="range-field"><div class="range-head"><span>背景遮罩</span><b id="overlayValue">${state.backgroundOverlay}%</b></div><input id="overlayRange" type="range" min="0" max="75" value="${state.backgroundOverlay}"></div><div class="bubble-color-grid">${colorSettingHtml("我的气泡", "myBubbleColor")}${colorSettingHtml("我的文字", "myBubbleTextColor")}${colorSettingHtml("他的气泡", "loverBubbleColor")}${colorSettingHtml("他的文字", "loverBubbleTextColor")}</div><button class="restore-button color-reset" id="resetBubbleColors">恢复默认气泡配色</button></section>
+    <section class="drawer-section sidebar-background-settings"><div class="section-title"><strong>侧边栏壁纸</strong><span>同时作用于左右两侧</span></div><div class="sidebar-background-preview ${safeImage(state.sidebarBackgroundImage) ? "has-image" : ""}" style="--preview-sidebar-image:${safeImage(state.sidebarBackgroundImage) ? `url('${state.sidebarBackgroundImage}')` : "none"};--preview-sidebar-blur:${state.sidebarBackgroundBlur}px"><i></i><span>左侧栏</span><span>右侧栏</span></div><div class="background-actions"><label class="wallpaper-button">更换侧栏壁纸<input id="sidebarBackgroundFile" type="file" accept="image/*"></label><button class="restore-button" id="removeSidebarBackground">恢复默认</button></div><div class="range-field"><div class="range-head"><span>壁纸模糊度</span><b id="sidebarBlurValue">${state.sidebarBackgroundBlur}px</b></div><input id="sidebarBlurRange" type="range" min="0" max="24" step="1" value="${state.sidebarBackgroundBlur}"></div></section>
+    <section class="drawer-section intro-settings"><div class="section-title"><strong>开屏与欢迎语</strong><span>Canvas 蝴蝶动画</span></div><label class="option-toggle intro-toggle"><span><b>显示开屏动画</b><small>每次重新进入时播放</small></span><input id="introEnabled" type="checkbox" ${state.introEnabled ? "checked" : ""}><i></i></label><label class="field-label"><span>随机欢迎语，一行一句</span><textarea id="welcomeMessagesText" placeholder="欢迎回来。讯号已经接通。">${escapeHtml(state.welcomeMessages.join("\n"))}</textarea></label><button class="secondary-button memory-add" id="saveWelcomeMessages">保存欢迎语</button></section>
+    <section class="drawer-section reply-delay-settings"><div class="section-title"><strong>回复等待时间</strong><span>区间内随机</span></div><p class="drawer-intro">点击手动回复后，等待时间会在最短与最长之间随机选择。</p><div class="range-field"><div class="range-head"><span>最短等待</span><b id="delayMinValue">${formatDelay(state.replyDelayMin)}</b></div><input id="delayMinRange" type="range" min="1" max="60" step="1" value="${state.replyDelayMin}"></div><div class="range-field"><div class="range-head"><span>最长等待</span><b id="delayMaxValue">${formatDelay(state.replyDelayMax)}</b></div><input id="delayMaxRange" type="range" min="1" max="120" step="1" value="${state.replyDelayMax}"></div><div class="delay-scale"><span>1 秒</span><span>1 分钟</span><span>2 分钟</span></div></section>
+    <section class="drawer-section"><div class="section-title"><strong>显示模式</strong></div><div class="theme-choice"><button data-theme-choice="light" class="${state.theme === "light" ? "active" : ""}">浅色</button><button data-theme-choice="dark" class="${state.theme === "dark" ? "active" : ""}">深色</button></div></section>`;
   bindSettingInputs();
   document.querySelectorAll("[data-avatar]").forEach((input) => input.addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
@@ -758,6 +796,33 @@ function renderAppearanceDrawer() {
     else state.backgroundImage = previous;
   });
   $("removeBackground").addEventListener("click", () => { state.backgroundImage = ""; saveState(); applyAppearance(); renderAppearanceDrawer(); showToast("已恢复默认背景"); });
+  $("sidebarBackgroundFile").addEventListener("change", async (event) => {
+    const file = event.target.files[0]; if (!file) return;
+    const previous = state.sidebarBackgroundImage;
+    state.sidebarBackgroundImage = await compressImage(file, 1800, 0.82);
+    if (await saveStateNow(false)) { applyAppearance(); renderAppearanceDrawer(); showToast("侧边栏壁纸已替换"); }
+    else state.sidebarBackgroundImage = previous;
+  });
+  $("removeSidebarBackground").addEventListener("click", () => { state.sidebarBackgroundImage = ""; saveState(); applyAppearance(); renderAppearanceDrawer(); showToast("已恢复默认侧栏背景"); });
+  $("sidebarBlurRange").addEventListener("input", (event) => {
+    state.sidebarBackgroundBlur = Number(event.target.value);
+    $("sidebarBlurValue").textContent = `${state.sidebarBackgroundBlur}px`;
+    document.querySelector(".sidebar-background-preview")?.style.setProperty("--preview-sidebar-blur", `${state.sidebarBackgroundBlur}px`);
+    applyAppearance(); saveState();
+  });
+  document.querySelectorAll("[data-color-picker]").forEach((input) => input.addEventListener("input", (event) => {
+    const key = event.target.dataset.colorPicker; state[key] = event.target.value.toLowerCase();
+    document.querySelector(`[data-color-hex="${key}"]`).value = state[key]; applyAppearance(); saveState();
+  }));
+  document.querySelectorAll("[data-color-hex]").forEach((input) => input.addEventListener("change", (event) => {
+    const key = event.target.dataset.colorHex; const color = safeColor(event.target.value);
+    if (!color) { event.target.value = shownBubbleColor(key); showToast("请输入六位色号，例如 #95ec69"); return; }
+    state[key] = color; document.querySelector(`[data-color-picker="${key}"]`).value = color; event.target.value = color; applyAppearance(); saveState();
+  }));
+  $("resetBubbleColors").addEventListener("click", () => {
+    ["myBubbleColor", "myBubbleTextColor", "loverBubbleColor", "loverBubbleTextColor"].forEach((key) => { state[key] = ""; });
+    saveState(); applyAppearance(); renderAppearanceDrawer(); showToast("已恢复当前模式的默认气泡配色");
+  });
   $("introEnabled").addEventListener("change", (event) => { state.introEnabled = event.target.checked; saveState(); });
   $("saveWelcomeMessages").addEventListener("click", () => {
     const messages = [...new Set($("welcomeMessagesText").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))];
@@ -854,7 +919,7 @@ async function importData(event) {
   try {
     const incoming = JSON.parse(await file.text());
     if (!Array.isArray(incoming.cards) || (!Array.isArray(incoming.messages) && !Array.isArray(incoming.conversations))) throw new Error("invalid");
-    state = normalizeState({ ...incoming, version: 5 });
+    state = normalizeState({ ...incoming, version: 6 });
     if (await saveStateNow(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("备份已恢复"); }
     else state = previous;
   } catch { state = previous; showToast("无法读取这个备份文件"); }
