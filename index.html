@@ -7,7 +7,7 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles.css?v=15" />
+  <link rel="stylesheet" href="./styles.css?v=17" />
 </head>
 <body>
   <div class="opening-screen" id="openingScreen" aria-label="正在进入我们的空间">
@@ -44,7 +44,7 @@
     <section class="chat-window">
       <header class="chat-topbar">
         <button class="mobile-menu-button" id="mobileMenu" aria-label="打开功能菜单"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-        <div class="chat-person"><strong id="loverName">我的唯一</strong><span id="presence">讯号在线</span></div>
+        <div class="chat-person"><strong id="loverName">我的唯一</strong><span class="chat-status"><span id="presence">讯号在线</span><i>·</i><span id="saveIndicator" data-status="loading">正在载入</span></span></div>
         <button class="more-button" id="chatInfoButton" aria-label="聊天设置"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></svg></button>
       </header>
 
@@ -66,6 +66,6 @@
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app.js?v=16" defer></script>
+  <script src="./app.js?v=17" defer></script>
 </body>
 </html>

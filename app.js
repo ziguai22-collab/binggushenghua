@@ -1,7 +1,10 @@
 const KEY = "binggushenghua-v3";
 const oldKey = "binggushenghua-v2";
+const DB_NAME = "binggushenghua-local";
+const DB_STORE = "app-state";
+const DB_KEY = "current";
 const defaults = {
-  version: 4,
+  version: 5,
   theme: "light",
   myName: "我",
   loverName: "我的唯一",
@@ -21,6 +24,10 @@ const defaults = {
   replyQuoteProbability: 50,
   introEnabled: true,
   welcomeMessages: ["欢迎回来。讯号已经接通。", "世界很远，而你们始终在同一条讯号里。"],
+  welcomeShuffle: [],
+  lastWelcomeMessage: "",
+  lastSavedAt: "",
+  lastBackupAt: "",
   anniversary: "2026-01-06",
   memoryBackgroundImage: "",
   memoryBackgroundBlur: 0,
@@ -39,12 +46,17 @@ const defaults = {
 };
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-let state = loadState();
+let state;
 let activeTool = null;
 let typing = false;
 let cardQuery = "";
 let toastTimer = null;
 let proactiveTimer = null;
+let databasePromise = null;
+let storageMode = "indexedDB";
+let saveTimer = null;
+let saveQueue = Promise.resolve(true);
+let saveRevision = 0;
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -65,15 +77,15 @@ function touchConversation() {
 
 function normalizeState(saved = {}) {
     const migrated = { ...structuredClone(defaults), ...saved };
-    migrated.sections = Array.isArray(saved.sections) ? saved.sections.map((item) => typeof item === "string" ? item : item.name).filter(Boolean) : defaults.sections;
+    migrated.sections = Array.isArray(saved.sections) ? saved.sections.map((item) => typeof item === "string" ? item : item.name).filter(Boolean) : structuredClone(defaults.sections);
     migrated.cards = Array.isArray(saved.cards) ? saved.cards.map((card) => ({
       id: card.id || uid(), section: card.section || migrated.sections.find((name) => name === card.sectionId) || card.sectionId || "日常",
       content: card.content || "", triggers: Array.isArray(card.triggers) ? card.triggers : [],
       random: card.random !== false, response: card.response !== false, enabled: card.enabled !== false,
       combo: card.combo === true,
-    })) : defaults.cards;
-    migrated.memories = Array.isArray(saved.memories) ? saved.memories : defaults.memories;
-    migrated.memoryQuotes = Array.isArray(saved.memoryQuotes) && saved.memoryQuotes.some((quote) => String(quote).trim()) ? saved.memoryQuotes.map((quote) => String(quote).trim()).filter(Boolean) : defaults.memoryQuotes;
+    })) : structuredClone(defaults.cards);
+    migrated.memories = Array.isArray(saved.memories) ? saved.memories : structuredClone(defaults.memories);
+    migrated.memoryQuotes = Array.isArray(saved.memoryQuotes) && saved.memoryQuotes.some((quote) => String(quote).trim()) ? saved.memoryQuotes.map((quote) => String(quote).trim()).filter(Boolean) : structuredClone(defaults.memoryQuotes);
     migrated.memoryBackgroundImage = typeof saved.memoryBackgroundImage === "string" && saved.memoryBackgroundImage.startsWith("data:image/") ? saved.memoryBackgroundImage : "";
     migrated.memoryBackgroundBlur = Math.min(24, Math.max(0, Number(saved.memoryBackgroundBlur ?? defaults.memoryBackgroundBlur)));
     migrated.memoryTextColor = /^#[0-9a-f]{6}$/i.test(saved.memoryTextColor || "") ? saved.memoryTextColor : defaults.memoryTextColor;
@@ -81,7 +93,7 @@ function normalizeState(saved = {}) {
     migrated.replyDelayMax = Math.min(120, Math.max(migrated.replyDelayMin, Number(saved.replyDelayMax ?? defaults.replyDelayMax)));
     migrated.replyQuoteEnabled = saved.replyQuoteEnabled !== false;
     migrated.replyQuoteProbability = Math.min(100, Math.max(0, Number(saved.replyQuoteProbability ?? defaults.replyQuoteProbability)));
-    migrated.stickers = Array.isArray(saved.stickers) ? saved.stickers : [];
+    migrated.stickers = Array.isArray(saved.stickers) ? saved.stickers : structuredClone(defaults.stickers);
     const legacyMessages = Array.isArray(saved.messages) ? saved.messages : defaults.messages;
     migrated.conversations = Array.isArray(saved.conversations) && saved.conversations.length ? saved.conversations.map((conversation) => ({
       id: conversation.id || uid(), title: conversation.title || "新对话", createdAt: conversation.createdAt || new Date().toISOString(), updatedAt: conversation.updatedAt || conversation.createdAt || new Date().toISOString(),
@@ -92,29 +104,108 @@ function normalizeState(saved = {}) {
     migrated.proactiveInterval = Math.min(120, Math.max(5, Number(saved.proactiveInterval ?? defaults.proactiveInterval)));
     migrated.nextProactiveAt = Number(saved.nextProactiveAt || 0);
     migrated.introEnabled = saved.introEnabled !== false;
-    migrated.welcomeMessages = Array.isArray(saved.welcomeMessages) && saved.welcomeMessages.some((item) => String(item).trim()) ? saved.welcomeMessages.map((item) => String(item).trim()).filter(Boolean) : structuredClone(defaults.welcomeMessages);
-    migrated.version = 4;
+    migrated.welcomeMessages = Array.isArray(saved.welcomeMessages) && saved.welcomeMessages.some((item) => String(item).trim()) ? [...new Set(saved.welcomeMessages.map((item) => String(item).trim()).filter(Boolean))] : structuredClone(defaults.welcomeMessages);
+    migrated.welcomeShuffle = Array.isArray(saved.welcomeShuffle) ? saved.welcomeShuffle.map(String).filter((item) => migrated.welcomeMessages.includes(item)) : [];
+    migrated.lastWelcomeMessage = typeof saved.lastWelcomeMessage === "string" ? saved.lastWelcomeMessage : "";
+    migrated.lastSavedAt = typeof saved.lastSavedAt === "string" ? saved.lastSavedAt : "";
+    migrated.lastBackupAt = typeof saved.lastBackupAt === "string" ? saved.lastBackupAt : "";
+    migrated.version = 5;
     delete migrated.messages;
     delete migrated.sectionCombos;
     return migrated;
 }
 
-function loadState() {
+function openDatabase() {
+  if (!("indexedDB" in window)) return Promise.reject(new Error("IndexedDB unavailable"));
+  if (!databasePromise) databasePromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(DB_STORE)) request.result.createObjectStore(DB_STORE); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Unable to open IndexedDB"));
+  });
+  return databasePromise;
+}
+
+async function readDatabaseState() {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DB_STORE, "readonly");
+    const request = transaction.objectStore(DB_STORE).get(DB_KEY);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Unable to read local data"));
+  });
+}
+
+async function writeDatabaseState(snapshot) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DB_STORE, "readwrite");
+    transaction.objectStore(DB_STORE).put(snapshot, DB_KEY);
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("Unable to save local data"));
+    transaction.onabort = () => reject(transaction.error || new Error("Local save was aborted"));
+  });
+}
+
+function readLegacyState() {
+  try { return JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(oldKey) || "{}"); }
+  catch { return {}; }
+}
+
+async function loadState() {
   try {
-    return normalizeState(JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(oldKey) || "{}"));
+    const stored = await readDatabaseState();
+    if (stored) return normalizeState(stored);
+    const migrated = normalizeState(readLegacyState());
+    await writeDatabaseState(migrated);
+    return migrated;
   } catch {
-    return normalizeState({});
+    storageMode = "localStorage";
+    return normalizeState(readLegacyState());
   }
 }
 
+function setSaveStatus(status, label) {
+  const indicator = $("saveIndicator");
+  if (!indicator) return;
+  indicator.dataset.status = status;
+  indicator.textContent = label;
+}
+
+async function persistState(quiet = true) {
+  const savedAt = new Date().toISOString();
+  const snapshot = structuredClone({ ...state, version: 5, lastSavedAt: savedAt });
+  const task = async () => {
+    try {
+      if (storageMode === "indexedDB") await writeDatabaseState(snapshot);
+      else localStorage.setItem(KEY, JSON.stringify(snapshot));
+      state.lastSavedAt = savedAt;
+      setSaveStatus("saved", `已保存 ${new Date(savedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`);
+      return true;
+    } catch {
+      setSaveStatus("failed", "保存失败");
+      if (!quiet) showToast("保存失败，请先导出备份并检查本地空间");
+      return false;
+    }
+  };
+  saveQueue = saveQueue.then(task, task);
+  return saveQueue;
+}
+
 function saveState(quiet = true) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-    return true;
-  } catch {
-    if (!quiet) showToast("本机存储空间不足，请减少图片或先导出备份");
-    return false;
-  }
+  saveRevision += 1;
+  const revision = saveRevision;
+  setSaveStatus("saving", "保存中…");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { if (revision === saveRevision) persistState(quiet); }, 180);
+  return true;
+}
+
+async function saveStateNow(quiet = true) {
+  clearTimeout(saveTimer);
+  saveRevision += 1;
+  setSaveStatus("saving", "保存中…");
+  return persistState(quiet);
 }
 
 function showToast(message) {
@@ -125,11 +216,28 @@ function showToast(message) {
   toastTimer = setTimeout(() => { toast.hidden = true; }, 2300);
 }
 
+function nextWelcomeMessage() {
+  const welcomes = state.welcomeMessages.length ? [...new Set(state.welcomeMessages)] : structuredClone(defaults.welcomeMessages);
+  let bag = Array.isArray(state.welcomeShuffle) ? state.welcomeShuffle.filter((item, index, items) => welcomes.includes(item) && items.indexOf(item) === index) : [];
+  if (!bag.length) {
+    bag = [...welcomes];
+    for (let index = bag.length - 1; index > 0; index -= 1) {
+      const target = Math.floor(Math.random() * (index + 1));
+      [bag[index], bag[target]] = [bag[target], bag[index]];
+    }
+    if (bag.length > 1 && bag[0] === state.lastWelcomeMessage) [bag[0], bag[1]] = [bag[1], bag[0]];
+  }
+  const next = bag.shift() || welcomes[0];
+  state.welcomeShuffle = bag;
+  state.lastWelcomeMessage = next;
+  saveState();
+  return next;
+}
+
 function runOpeningAnimation() {
   const screen = $("openingScreen");
   if (!state.introEnabled) { screen.hidden = true; return; }
-  const welcomes = state.welcomeMessages.length ? state.welcomeMessages : defaults.welcomeMessages;
-  $("openingWelcome").textContent = welcomes[Math.floor(Math.random() * welcomes.length)];
+  $("openingWelcome").textContent = nextWelcomeMessage();
   const canvas = $("openingCanvas"); const context = canvas.getContext("2d");
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let width = 0; let height = 0; let ratio = 1; let frame = 0; const started = performance.now();
@@ -332,7 +440,7 @@ async function sendImage(event) {
     const dataUrl = await compressImage(file, 1600, 0.84);
     const message = { id: uid(), from: "me", type: "image", content: "[图片]", dataUrl, createdAt: new Date().toISOString() };
     conversation.messages.push(message); conversation.updatedAt = new Date().toISOString();
-    if (!saveState(false)) conversation.messages = conversation.messages.filter((item) => item.id !== message.id);
+    if (!await saveStateNow(false)) conversation.messages = conversation.messages.filter((item) => item.id !== message.id);
     else if (conversation.id === state.activeConversationId) renderMessages();
   } catch { showToast("这张图片暂时无法读取"); }
   event.target.value = "";
@@ -544,12 +652,14 @@ function renderStickersDrawer() {
   $("drawerContent").innerHTML = `<section class="drawer-section sticker-upload-section"><div class="section-title"><strong>表情包</strong><span>支持 PNG、JPG、GIF、WebP</span></div><p class="drawer-intro">上传后会直接出现在聊天输入栏的笑脸按钮里，不需要再分类。</p><label class="upload-box">＋ 选择一张或多张图片<input id="stickerFiles" type="file" accept="image/*" multiple></label></section><section><div class="section-title"><strong>已保存</strong><span>${state.stickers.length} 张</span></div>${state.stickers.length ? `<div class="sticker-grid">${state.stickers.map((sticker) => `<article class="sticker-card" data-sticker="${sticker.id}"><img src="${sticker.dataUrl}" alt="${escapeHtml(sticker.name)}"><button data-delete-sticker="${sticker.id}" title="删除" aria-label="删除表情">×</button><input data-sticker-field="name" value="${escapeHtml(sticker.name)}" aria-label="表情名称"></article>`).join("")}</div>` : '<div class="empty-tool">还没有表情包。上传后可直接从聊天输入区发送。</div>'}</section>`;
   $("stickerFiles").addEventListener("change", async (event) => {
     const files = [...event.target.files];
+    const previousStickers = structuredClone(state.stickers);
     for (const file of files) {
       if (file.size > 1.5 * 1024 * 1024) { showToast(`${file.name} 超过 1.5MB，已跳过`); continue; }
       const dataUrl = await readAsDataUrl(file);
       state.stickers.push({ id: uid(), name: file.name.replace(/\.[^.]+$/, ""), dataUrl });
     }
-    if (saveState(false)) { showToast(`已上传 ${files.length} 张表情`); renderStickersDrawer(); }
+    if (await saveStateNow(false)) { showToast(`已上传 ${files.length} 张表情`); renderStickersDrawer(); }
+    else state.stickers = previousStickers;
   });
   document.querySelectorAll("[data-sticker-field]").forEach((input) => input.addEventListener("change", (event) => {
     const sticker = state.stickers.find((item) => item.id === event.target.closest("[data-sticker]").dataset.sticker);
@@ -570,8 +680,10 @@ function renderMemoriesDrawer() {
   bindSettingInputs();
   $("memoryBackgroundFile").addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
+    const previous = state.memoryBackgroundImage;
     state.memoryBackgroundImage = await compressImage(file, 1600, 0.84);
-    if (saveState(false)) { renderMemoriesDrawer(); showToast("纪念日卡片壁纸已替换"); }
+    if (await saveStateNow(false)) { renderMemoriesDrawer(); showToast("纪念日卡片壁纸已替换"); }
+    else state.memoryBackgroundImage = previous;
   });
   $("removeMemoryBackground").addEventListener("click", () => { state.memoryBackgroundImage = ""; saveState(); renderMemoriesDrawer(); showToast("已恢复默认卡片背景"); });
   $("memoryBlurRange").addEventListener("input", (event) => {
@@ -624,8 +736,10 @@ function renderAppearanceDrawer() {
   bindSettingInputs();
   document.querySelectorAll("[data-avatar]").forEach((input) => input.addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
-    state[event.target.dataset.avatar] = await compressImage(file, 360, 0.86);
-    if (saveState(false)) { applyAppearance(); renderMessages(); renderAppearanceDrawer(); showToast("头像已替换"); }
+    const key = event.target.dataset.avatar; const previous = state[key];
+    state[key] = await compressImage(file, 360, 0.86);
+    if (await saveStateNow(false)) { applyAppearance(); renderMessages(); renderAppearanceDrawer(); showToast("头像已替换"); }
+    else state[key] = previous;
   }));
   $("delayMinRange").addEventListener("input", (event) => {
     state.replyDelayMin = Number(event.target.value);
@@ -638,15 +752,17 @@ function renderAppearanceDrawer() {
   });
   $("backgroundFile").addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
+    const previous = state.backgroundImage;
     state.backgroundImage = await compressImage(file, 1800, 0.82);
-    if (saveState(false)) { applyAppearance(); renderAppearanceDrawer(); showToast("聊天背景已替换"); }
+    if (await saveStateNow(false)) { applyAppearance(); renderAppearanceDrawer(); showToast("聊天背景已替换"); }
+    else state.backgroundImage = previous;
   });
   $("removeBackground").addEventListener("click", () => { state.backgroundImage = ""; saveState(); applyAppearance(); renderAppearanceDrawer(); showToast("已恢复默认背景"); });
   $("introEnabled").addEventListener("change", (event) => { state.introEnabled = event.target.checked; saveState(); });
   $("saveWelcomeMessages").addEventListener("click", () => {
-    const messages = $("welcomeMessagesText").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    const messages = [...new Set($("welcomeMessagesText").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))];
     if (!messages.length) { showToast("请至少保留一句欢迎语"); return; }
-    state.welcomeMessages = messages; saveState(); showToast(`已保存 ${messages.length} 句欢迎语`);
+    state.welcomeMessages = messages; state.welcomeShuffle = []; state.lastWelcomeMessage = ""; saveState(); showToast(`已保存 ${messages.length} 句欢迎语`);
   });
   [["fontSizeRange", "fontSize", "fontSizeValue", "px"], ["radiusRange", "bubbleRadius", "radiusValue", "px"], ["overlayRange", "backgroundOverlay", "overlayValue", "%"]].forEach(([id, key, output, unit]) => {
     $(id).addEventListener("input", (event) => { state[key] = Number(event.target.value); $(output).textContent = `${state[key]}${unit}`; applyAppearance(); saveState(); });
@@ -658,8 +774,10 @@ function renderBackgroundDrawer() {
   $("drawerContent").innerHTML = `<section class="drawer-section"><div class="section-title"><strong>聊天背景</strong><span>只影响消息区域</span></div><div class="background-preview" style="background-image:${safeImage(state.backgroundImage) ? `url('${state.backgroundImage}')` : "none"}"></div><label class="upload-box">选择背景图片<input id="backgroundFile" type="file" accept="image/*"></label><div class="button-row"><button class="secondary-button" id="removeBackground">恢复默认背景</button></div></section><section><div class="section-title"><strong>文字与气泡</strong><span>即时预览</span></div><div class="range-field"><div class="range-head"><span>聊天字体大小</span><b id="fontSizeValue">${state.fontSize}px</b></div><input id="fontSizeRange" type="range" min="12" max="22" value="${state.fontSize}"></div><div class="range-field"><div class="range-head"><span>气泡圆角</span><b id="radiusValue">${state.bubbleRadius}px</b></div><input id="radiusRange" type="range" min="0" max="18" value="${state.bubbleRadius}"></div><div class="range-field"><div class="range-head"><span>背景遮罩</span><b id="overlayValue">${state.backgroundOverlay}%</b></div><input id="overlayRange" type="range" min="0" max="75" value="${state.backgroundOverlay}"></div></section>`;
   $("backgroundFile").addEventListener("change", async (event) => {
     const file = event.target.files[0]; if (!file) return;
+    const previous = state.backgroundImage;
     state.backgroundImage = await compressImage(file, 1800, 0.82);
-    if (saveState(false)) { applyAppearance(); renderBackgroundDrawer(); showToast("聊天背景已替换"); }
+    if (await saveStateNow(false)) { applyAppearance(); renderBackgroundDrawer(); showToast("聊天背景已替换"); }
+    else state.backgroundImage = previous;
   });
   $("removeBackground").addEventListener("click", () => { state.backgroundImage = ""; saveState(); applyAppearance(); renderBackgroundDrawer(); });
   [["fontSizeRange", "fontSize", "fontSizeValue", "px"], ["radiusRange", "bubbleRadius", "radiusValue", "px"], ["overlayRange", "backgroundOverlay", "overlayValue", "%"]].forEach(([id, key, output, unit]) => {
@@ -667,10 +785,35 @@ function renderBackgroundDrawer() {
   });
 }
 
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value <= 0) return "0 KB";
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / 1024 / 1024).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+async function renderStorageStats() {
+  const output = $("storageStats"); if (!output) return;
+  const stateSize = new Blob([JSON.stringify(state)]).size;
+  let usage = stateSize; let quota = 0; let persistent = false;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    usage = estimate?.usage || usage; quota = estimate?.quota || 0;
+    persistent = await navigator.storage?.persisted?.() || false;
+  } catch {}
+  output.innerHTML = `<div><span>本站数据</span><b>${formatBytes(usage)}${quota ? ` / ${formatBytes(quota)}` : ""}</b></div><div><span>当前数据包</span><b>${formatBytes(stateSize)}</b></div><div><span>保存方式</span><b>${storageMode === "indexedDB" ? "大容量本地数据库" : "兼容模式"}</b></div><div><span>长期保留</span><b>${persistent ? "已获得浏览器保护" : "由浏览器管理"}</b></div>`;
+}
+
 function renderDataDrawer() {
-  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="save-line">✓ <span>聊天、字卡和图片已保存在当前浏览器</span></div><p class="drawer-intro">更换手机、浏览器或清理网站数据前，请先导出完整备份。</p><button class="export-button" id="exportButton">导出完整备份</button><label class="upload-box" style="margin-top:10px">导入备份文件<input id="importFile" type="file" accept="application/json"></label></section><section><div class="section-title"><strong>整理数据</strong><span>操作前建议备份</span></div><div class="button-row"><button class="secondary-button" id="clearHistory">清空全部对话</button><button class="danger-button" id="resetAll">恢复初始状态</button></div></section>`;
+  const backupText = state.lastBackupAt ? `上次备份：${new Date(state.lastBackupAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}` : "尚未导出过完整备份";
+  $("drawerContent").innerHTML = `<section class="drawer-section"><div class="save-line">✓ <span>聊天、字卡和图片已保存在当前浏览器</span></div><div class="storage-stats" id="storageStats"><div><span>正在读取本地空间…</span></div></div><p class="backup-note">${backupText}</p><p class="drawer-intro">更换手机、浏览器或清理网站数据前，请先导出完整备份。</p><button class="export-button" id="exportButton">导出完整备份</button><label class="upload-box" style="margin-top:10px">导入备份文件<input id="importFile" type="file" accept="application/json"></label><button class="secondary-button storage-protect" id="protectStorage">请求浏览器长期保留</button></section><section><div class="section-title"><strong>整理数据</strong><span>操作前建议备份</span></div><div class="button-row"><button class="secondary-button" id="clearHistory">清空全部对话</button><button class="danger-button" id="resetAll">恢复初始状态</button></div></section>`;
+  renderStorageStats();
   $("exportButton").addEventListener("click", exportData);
   $("importFile").addEventListener("change", importData);
+  $("protectStorage").hidden = !navigator.storage?.persist;
+  $("protectStorage").addEventListener("click", async () => {
+    const granted = await navigator.storage.persist();
+    showToast(granted ? "浏览器已允许长期保留本站数据" : "浏览器暂未授予长期保留权限"); renderStorageStats();
+  });
   $("clearHistory").addEventListener("click", () => { if (!confirm("确定清空全部对话记录吗？")) return; state.conversations.forEach((conversation) => { conversation.messages = []; conversation.updatedAt = new Date().toISOString(); }); saveState(); renderMessages(); showToast("全部对话记录已清空"); });
   $("resetAll").addEventListener("click", () => { if (!confirm("确定恢复初始状态吗？所有本机数据都会被覆盖。")) return; state = normalizeState({}); saveState(); applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("已恢复初始状态"); });
 }
@@ -697,7 +840,9 @@ async function compressImage(file, maxSide, quality) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-function exportData() {
+async function exportData() {
+  state.lastBackupAt = new Date().toISOString();
+  await saveStateNow(true);
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob); const link = document.createElement("a");
   link.href = url; link.download = `病骨生花-完整备份-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
@@ -705,47 +850,57 @@ function exportData() {
 
 async function importData(event) {
   const file = event.target.files[0]; if (!file) return;
+  const previous = structuredClone(state);
   try {
     const incoming = JSON.parse(await file.text());
     if (!Array.isArray(incoming.cards) || (!Array.isArray(incoming.messages) && !Array.isArray(incoming.conversations))) throw new Error("invalid");
-    state = normalizeState({ ...incoming, version: 4 });
-    if (saveState(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("备份已恢复"); }
-  } catch { showToast("无法读取这个备份文件"); }
+    state = normalizeState({ ...incoming, version: 5 });
+    if (await saveStateNow(false)) { applyAppearance(); setMode(state.mode); renderMessages(); renderDataDrawer(); scheduleProactive(); showToast("备份已恢复"); }
+    else state = previous;
+  } catch { state = previous; showToast("无法读取这个备份文件"); }
 }
 
-document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.tool)));
-document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
-$("profileButton").addEventListener("click", () => openTool("memories"));
-$("chatInfoButton").addEventListener("click", openChatOptions);
-$("optionsClose").addEventListener("click", closeChatOptions);
-$("optionsScrim").addEventListener("click", closeChatOptions);
-$("toolScrim").addEventListener("click", () => openTool("chat"));
-$("drawerBack").addEventListener("click", () => {
-  if (window.matchMedia("(max-width: 760px)").matches && activeTool && activeTool !== "conversations") openTool("conversations");
-  else openTool("chat");
-});
-$("drawerClose").addEventListener("click", () => openTool("chat"));
-$("themeButton").addEventListener("click", () => { state.theme = state.theme === "light" ? "dark" : "light"; saveState(); applyAppearance(); if (activeTool === "appearance") renderAppearanceDrawer(); });
-$("mobileMenu").addEventListener("click", () => openTool("conversations"));
-$("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } });
-$("replyButton").addEventListener("click", requestReply);
-$("stickerButton").addEventListener("click", toggleStickerPopover);
-$("imageFile").addEventListener("change", sendImage);
-document.addEventListener("click", (event) => {
-  if (!event.target.closest(".popover,.composer")) closePopovers();
-  if (!event.target.closest("[data-message-row]")) document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
-});
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && state.proactiveEnabled && state.nextProactiveAt <= Date.now()) deliverProactiveMessage();
-});
-window.addEventListener("resize", () => {
-  $("toolScrim").hidden = !(activeTool === "conversations" && window.matchMedia("(max-width: 760px)").matches);
-});
+function bindGlobalEvents() {
+  document.querySelectorAll("[data-tool]").forEach((button) => button.addEventListener("click", () => openTool(button.dataset.tool)));
+  document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
+  $("profileButton").addEventListener("click", () => openTool("memories"));
+  $("chatInfoButton").addEventListener("click", openChatOptions);
+  $("optionsClose").addEventListener("click", closeChatOptions);
+  $("optionsScrim").addEventListener("click", closeChatOptions);
+  $("toolScrim").addEventListener("click", () => openTool("chat"));
+  $("drawerBack").addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 760px)").matches && activeTool && activeTool !== "conversations") openTool("conversations");
+    else openTool("chat");
+  });
+  $("drawerClose").addEventListener("click", () => openTool("chat"));
+  $("themeButton").addEventListener("click", () => { state.theme = state.theme === "light" ? "dark" : "light"; saveState(); applyAppearance(); if (activeTool === "appearance") renderAppearanceDrawer(); });
+  $("mobileMenu").addEventListener("click", () => openTool("conversations"));
+  $("draft").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendText(); } });
+  $("replyButton").addEventListener("click", requestReply);
+  $("stickerButton").addEventListener("click", toggleStickerPopover);
+  $("imageFile").addEventListener("change", sendImage);
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".popover,.composer")) closePopovers();
+    if (!event.target.closest("[data-message-row]")) document.querySelectorAll("[data-message-row].actions-open").forEach((row) => row.classList.remove("actions-open"));
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) saveStateNow(true);
+    else if (state.proactiveEnabled && state.nextProactiveAt <= Date.now()) deliverProactiveMessage();
+  });
+  window.addEventListener("pagehide", () => saveStateNow(true));
+  window.addEventListener("resize", () => { $("toolScrim").hidden = !(activeTool === "conversations" && window.matchMedia("(max-width: 760px)").matches); });
+}
 
-applyAppearance();
-setMode(state.mode);
-renderMessages();
-saveState();
-scheduleProactive();
-runOpeningAnimation();
-if ("serviceWorker" in navigator) navigator.serviceWorker.getRegistrations().then((registrations) => registrations.forEach((registration) => registration.unregister())).catch(() => {});
+async function bootstrap() {
+  state = await loadState();
+  bindGlobalEvents();
+  applyAppearance();
+  setMode(state.mode);
+  renderMessages();
+  await saveStateNow(true);
+  scheduleProactive();
+  runOpeningAnimation();
+  if ("serviceWorker" in navigator) navigator.serviceWorker.getRegistrations().then((registrations) => registrations.forEach((registration) => registration.unregister())).catch(() => {});
+}
+
+bootstrap().catch(() => { setSaveStatus("failed", "载入失败"); showToast("本地数据载入失败，请刷新后重试"); });
