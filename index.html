@@ -10,10 +10,10 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles-v37.css" />
+  <link rel="stylesheet" href="./styles-v38.css" />
   <script>
     (() => {
-      const release = "37";
+      const release = "38";
       try {
         if (sessionStorage.getItem("binggushenghua-release") === release) return;
         sessionStorage.setItem("binggushenghua-release", release);
@@ -108,6 +108,45 @@
       <button class="choice-submit" id="choiceSubmit">发送到聊天</button>
     </section>
   </div>
-  <script src="./app-v37.js" defer></script>
+  <div class="tarot-editor" id="tarotEditor" hidden role="dialog" aria-modal="true" aria-label="邀请爱人抽塔罗牌">
+    <button class="tarot-editor-scrim" id="tarotEditorScrim" aria-label="关闭塔罗设置"></button>
+    <section class="tarot-editor-sheet">
+      <span class="tarot-editor-wallpaper" id="tarotEditorWallpaper" aria-hidden="true"></span>
+      <span class="tarot-editor-veil" aria-hidden="true"></span>
+      <div class="tarot-editor-content">
+        <header><div><span>TAROT READING</span><strong>邀请他替你抽牌</strong></div><button id="tarotEditorClose" aria-label="关闭">×</button></header>
+        <label><span>想问的问题 · 可留空</span><textarea id="tarotQuestion" rows="3" maxlength="160" placeholder="把此刻想知道的事写下来"></textarea></label>
+        <div class="tarot-count-field">
+          <span>抽牌张数</span>
+          <div><button id="tarotCountDown" aria-label="减少一张">−</button><input id="tarotCount" type="number" min="1" max="78" value="3" inputmode="numeric" aria-label="抽牌张数"><button id="tarotCountUp" aria-label="增加一张">＋</button></div>
+        </div>
+        <label class="tarot-toggle"><span><b>允许逆位</b><small>每张牌独立决定正位或逆位</small></span><input id="tarotReversed" type="checkbox"><i></i></label>
+        <details class="tarot-appearance-settings">
+          <summary><span>牌室外观</span><small>独立壁纸与光晕</small></summary>
+          <div class="tarot-appearance-body">
+            <div class="button-row"><label class="upload-box compact">上传牌室壁纸<input id="tarotBackgroundFile" type="file" accept="image/*"></label><button class="secondary-button" id="removeTarotBackground">恢复默认</button></div>
+            <div class="range-field"><div class="range-head"><span>壁纸模糊</span><b id="tarotBlurValue">4px</b></div><input id="tarotBlurRange" type="range" min="0" max="24" value="4"></div>
+            <div class="range-field"><div class="range-head"><span>暗色遮罩</span><b id="tarotOverlayValue">38%</b></div><input id="tarotOverlayRange" type="range" min="0" max="80" value="38"></div>
+            <div class="range-field"><div class="range-head"><span>星光强度</span><b id="tarotGlowValue">58%</b></div><input id="tarotGlowRange" type="range" min="0" max="100" value="58"></div>
+          </div>
+        </details>
+        <button class="tarot-submit" id="tarotSubmit">发送邀请</button>
+      </div>
+    </section>
+  </div>
+  <div class="tarot-ritual" id="tarotRitual" hidden role="dialog" aria-modal="true" aria-label="塔罗抽牌">
+    <span class="tarot-ritual-wallpaper" id="tarotRitualWallpaper" aria-hidden="true"></span>
+    <span class="tarot-ritual-veil" aria-hidden="true"></span>
+    <canvas id="tarotCanvas" aria-hidden="true"></canvas>
+    <button class="tarot-ritual-close" id="tarotRitualClose" aria-label="关闭塔罗牌室">×</button>
+    <main class="tarot-ritual-content">
+      <header><span id="tarotRitualKicker">THE CARDS ARE LISTENING</span><h2 id="tarotRitualTitle">他正在洗牌</h2><p id="tarotRitualQuestion"></p></header>
+      <div class="tarot-shuffle-stage" id="tarotShuffleStage" aria-live="polite"></div>
+      <div class="tarot-result-cards" id="tarotRitualCards" hidden></div>
+      <button class="tarot-skip" id="tarotSkip">跳过动画</button>
+      <button class="tarot-done" id="tarotRitualDone" hidden>收下这次牌面</button>
+    </main>
+  </div>
+  <script src="./app-v38.js" defer></script>
 </body>
 </html>
