@@ -10,10 +10,10 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles-v32.css" />
+  <link rel="stylesheet" href="./styles-v33.css" />
   <script>
     (() => {
-      const release = "32";
+      const release = "33";
       try {
         if (sessionStorage.getItem("binggushenghua-release") === release) return;
         sessionStorage.setItem("binggushenghua-release", release);
@@ -87,6 +87,10 @@
     </section>
   </main>
   <div class="toast" id="toast" hidden></div>
-  <script src="./app-v32.js" defer></script>
+  <div class="media-viewer" id="mediaViewer" hidden role="dialog" aria-modal="true" aria-label="查看图片">
+    <button class="media-viewer-close" id="mediaViewerClose" aria-label="关闭图片预览">×</button>
+    <img id="mediaViewerImage" alt="聊天图片">
+  </div>
+  <script src="./app-v33.js" defer></script>
 </body>
 </html>
