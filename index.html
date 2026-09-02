@@ -10,7 +10,7 @@
   <meta name="description" content="只属于两个人的本地字卡传讯窗口" />
   <title>病骨生花</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./styles-v33.css" />
+  <link rel="stylesheet" href="./styles-v34.css" />
   <script>
     (() => {
       const release = "33";
@@ -75,11 +75,13 @@
       </div>
 
       <div class="popover sticker-popover" id="stickerPopover" hidden></div>
+      <div class="popover more-popover" id="morePopover" hidden></div>
 
       <footer class="composer">
         <div class="composer-quote-preview" id="composerQuote" hidden></div>
+        <button class="composer-icon plus-button" id="plusButton" title="更多功能" aria-label="更多功能"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
         <button class="composer-icon" id="stickerButton" title="发送表情包" aria-label="发送表情包"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 10h.01M15 10h.01M9 14c1.6 1.4 4.4 1.4 6 0"/></svg></button>
-        <label class="composer-icon image-send" title="发送本地图片" aria-label="发送本地图片"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 16l4-4 3 3 2-2 2 3M15 9h.01"/></svg><input id="imageFile" type="file" accept="image/*"></label>
+        <input id="imageFile" type="file" accept="image/*" hidden>
         <textarea id="draft" rows="1" placeholder="输入消息" aria-label="消息内容"></textarea>
         <button id="replyButton" class="reply-trigger" title="点击后让他回复" aria-label="点击后让他回复"><svg viewBox="0 0 24 24"><path d="M5 6h14v10H9l-4 3V6Z"/><path d="m16 2 .7 1.8 1.8.7-1.8.7L16 7l-.7-1.8-1.8-.7 1.8-.7L16 2Z"/></svg></button>
         <span id="modeLabel" class="visually-hidden">随机传讯</span>
@@ -91,6 +93,21 @@
     <button class="media-viewer-close" id="mediaViewerClose" aria-label="关闭图片预览">×</button>
     <img id="mediaViewerImage" alt="聊天图片">
   </div>
-  <script src="./app-v33.js" defer></script>
+  <div class="choice-editor" id="choiceEditor" hidden role="dialog" aria-modal="true" aria-label="新建指定选择">
+    <button class="choice-editor-scrim" id="choiceEditorScrim" aria-label="关闭指定选择"></button>
+    <section class="choice-editor-sheet">
+      <header><div><span>指定选择</span><strong>让他在下一轮给出答案</strong></div><button id="choiceEditorClose" aria-label="关闭">×</button></header>
+      <label><span>问题</span><input id="choiceQuestion" maxlength="120" placeholder="想问他什么？"></label>
+      <label><span>答案选项 · 一行一个</span><textarea id="choiceOptions" rows="5" placeholder="第一个答案&#10;第二个答案&#10;第三个答案"></textarea></label>
+      <div class="choice-mode" role="radiogroup" aria-label="选择方式">
+        <button class="active" data-choice-mode="single">单选</button>
+        <button data-choice-mode="multiple">多选</button>
+        <button data-choice-mode="ranking">排序</button>
+      </div>
+      <p id="choiceModeHelp">他会从所有选项里选择一个。</p>
+      <button class="choice-submit" id="choiceSubmit">发送到聊天</button>
+    </section>
+  </div>
+  <script src="./app-v34.js" defer></script>
 </body>
 </html>
